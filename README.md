@@ -2,7 +2,7 @@
 
 An experimental artificial-life simulation in which autonomous people and their settlements compete for resources, learn through selection, and gradually develop more complex collective behavior.
 
-> **Project status:** legacy research prototype / pre-alpha. The repository contains a playable visual simulation, but it is not yet the complete settlement-to-civilization system described in the roadmap below.
+> **Project status:** research prototype / pre-alpha. The active `main.py` path is a playable Pygame view over the deterministic multi-phase engine; the older simulation remains available as a comparison path.
 
 ## Vision
 
@@ -29,25 +29,25 @@ Version 1.0 implements the first prototype loop:
 - A separate display-free deterministic core probe in `simulation_core.py` with explicit ticks, seeded randomness, structured events, and versioned JSON snapshots; `headless_demo.py` demonstrates deterministic checkpoint/resume.
 - A separate display-free multi-phase engine in `colony_simulation.py` with tick-driven needs, aging, death, directed affinity, consent, pair bonding, pregnancy, birth, childcare hooks, and isolated genome inheritance.
 - Phase 3 cognition in the same headless engine: bounded perception, private episodic memory with deterministic TTL, semantic facts, explicit settlement knowledge sharing, and learned policy state isolated from genomes.
-- Phase 4 economy in the same headless engine: recipes, material reservation, labor ticks, incentive-based job allocation, wallets, settlement treasuries, demand pressure, material/time cost floors, and atomic purchases.
-- Phase 5 technology in the same headless engine: prerequisite-gated research, tick/resource costs, recipe effects, and treaty-gated diffusion.
+- Phase 4 economy in the same headless engine: recipes, material reservation, labor ticks, bounded storage capacity, incentive-based job allocation, wallets, settlement treasuries, demand pressure, material/time cost floors, atomic purchases, and specialization metrics.
+- Phase 5 technology in the same headless engine: prerequisite-gated research, deterministic success/failure, tick/resource costs, recipe effects, and treaty-gated diffusion.
 - Phase 6 diplomacy/conflict in the same headless engine: territory claims, treaties, migration, cross-settlement trade gates, persistent relation memory, deterministic combat, injury/death, and territory transfer.
+- A Pygame presentation layer in `pygame_app.py`; `main.py` now advances and renders the deterministic engine. The UI is observational: click residents to inspect them, while all movement, work, learning, love, reproduction, trade, research, diplomacy, and conflict are selected by the simulation AI.
+- Phase 7 replay/evaluation support: immutable checkpoint hashes, deterministic replay comparison, explicit 32-seed event/winner/specialization reports, and benchmark reports with warm-up, repetitions, runtime, and memory fields.
 
-The deterministic core and Phases 2–6 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Scale/replay evaluation remains the final roadmap phase.
+The deterministic core and Phases 2–7 engine are implemented infrastructure/domain slices, and the new Pygame UI consumes that state without owning domain rules. Resident and settlement decisions use deterministic learned policies and explicit rewards; this is an explainable policy-learning layer, not a claim of a neural-network trainer. The legacy Pygame simulation remains a separate comparison path.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
 ## How the prototype works
 
-1. `InitialGame` creates the world and four colonies.
-2. `FieldProcessing` creates the grid and places trees and berries.
-3. Each colony creates ten people and assigns neural-network chromosomes.
-4. On every update, the network chooses one of the four actions for each person.
-5. People move toward remembered resources, gather them, return them to the shared inventory, eat, or build.
-6. Fitness is recalculated and chromosomes are crossed over and mutated.
-7. A colony is removed when it has no people left. The run ends when no more than one colony remains.
+1. `main.py` creates a configured `ColonySimulation` and `PygameSimulationApp`.
+2. The UI calls one explicit simulation tick per unpaused frame and renders the resulting state.
+3. Click an agent to inspect its age, needs, wallet, job, bond, children, memory, and learning state.
+4. The simulation AI calls domain transitions for production, demand, research, courtship, reproduction, diplomacy, trade, and conflict; events appear in the right-hand panel.
+5. The legacy `InitialGame -> Colony -> Human` path remains available in its original modules for comparison, but is no longer the `main.py` entry path.
 
-The outer loop starts another run automatically after a simulated game-over. Closing the Pygame window saves the surviving chromosome populations and exits.
+Keyboard input is limited to Space (pause/continue or restart after game over), Up (faster), and Down (slower). Closing the Pygame window exits the active run.
 
 ## Project structure
 
@@ -64,6 +64,8 @@ The outer loop starts another run automatically after a simulated game-over. Clo
 | `Obj.py` | Building types |
 | `neuralnetwork.py` | Lightweight NumPy neural network |
 | `Animals.py` | Placeholder for a future animal system |
+| `colony_simulation.py` | Deterministic multi-phase domain engine |
+| `pygame_app.py` | Pygame renderer and input adapter |
 | `image/` | Pygame sprites |
 
 ## Quick start
@@ -89,25 +91,24 @@ python headless_demo.py
 python -m unittest discover -s tests -v
 ```
 
-The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay controls; close the window to save chromosomes and stop the program. The `save/` directory must exist before the first save.
+The renderer opens a `1440 x 900` window by default. The map and ledger are read-only views; Space, Up, and Down control only the simulation loop. The `save/` directory is still required only by the legacy comparison path.
 
 ## Current limitations
 
-- The legacy simulation is tightly coupled to Pygame and wall-clock time; the new deterministic core probe is not yet wired into that loop.
+- The legacy simulation remains tightly coupled to wall-clock time, while the new Pygame UI uses the deterministic engine through `pygame_app.py`.
 - Legacy random seeds, simulation speed, world size, and population size are not externally configurable; the core probe has explicit configuration.
 - Shared mutable state is updated from nested thread pools without an explicit synchronization model.
 - The deterministic core has a dependency-light test suite, but the legacy simulation still lacks complete integration coverage, dependency locking, packaging metadata, CI, and a benchmark harness.
-- Population evolution changes chromosomes of existing people; biological reproduction and inheritance are not modeled yet.
-- The headless Phase 2 engine models biological reproduction and inheritance separately from the legacy chromosome evolution path.
-- Skills are counters only and do not yet change productivity or unlock behavior.
+- The legacy simulation still evolves chromosomes separately; the active engine models biological reproduction and inherited genomes explicitly.
+- Skills and learned policies are intentionally lightweight and explainable; a richer neural or population-training system remains roadmap work.
 - Legacy persistence uses unversioned pickle files and assumes the `save/` directory already exists; the new core uses versioned JSON snapshots but does not migrate chromosome saves.
 - Advanced resources and buildings are defined but disabled or unused.
-- Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are implemented in the headless Phase 2 engine but are not wired into the legacy Pygame loop.
-- Bounded perception, episodic/semantic memory, learning, and explicit settlement knowledge sharing are implemented in the headless Phase 3 engine but are not wired into the legacy Pygame loop.
-- Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and atomic trade are implemented in the headless Phase 4 engine but are not wired into the legacy Pygame loop.
-- Technology prerequisites, research, recipe effects, and treaty-gated diffusion are implemented in the headless Phase 5 engine but are not wired into the legacy Pygame loop.
-- Territory claims, treaties, migration, trade gates, relation memory, and deterministic conflict consequences are implemented in the headless Phase 6 engine but are not wired into the legacy Pygame loop.
-- Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
+- Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, childcare, bounded memory, and learning are implemented in the active engine and selected autonomously.
+- Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and atomic trade are implemented in the active engine; treaty-connected AI settlements can trade food when inventories diverge.
+- Technology prerequisites, research, recipe effects, and treaty-gated diffusion are implemented in the active engine; settlement AI can share technology after contact.
+- Territory claims, treaties, migration, relation memory, and deterministic conflict consequences are implemented in the active engine and selected autonomously.
+- The Pygame UI is intentionally an observation surface, not a command console; direct domain APIs remain available for deterministic tests and tooling.
+- The benchmark harness reports workload evidence, but it does not yet claim a target hardware threshold or production-scale performance result.
 
 The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md).
 
@@ -130,11 +131,11 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - Price created goods from explicit material and labor-time cost foundations, then adjust quotes from observable supply and demand. Legacy integration remains deferred.
    - Make settlement-level decisions depend on shared observations and measurable needs.
 5. **Research technologies**
-   - The first headless technology slice is implemented: prerequisites, funded research ticks, rule effects, and treaty/contact-gated diffusion. Legacy integration remains deferred.
+   - The first deterministic technology slice is implemented: prerequisites, funded research ticks, rule effects, and treaty/contact-gated diffusion. The current UI exposes research status; deeper visualization remains deferred.
 6. **Add diplomacy and conflict**
-   - The first headless diplomacy/conflict slice is implemented: claims, trade gates, treaties, migration, resource-pressure decisions, combat, and persistent inter-settlement memory. Legacy integration remains deferred.
+   - The first deterministic diplomacy/conflict slice is implemented: claims, trade gates, treaties, migration, resource-pressure decisions, combat, and persistent inter-settlement memory. The current UI exposes the resulting state and events while settlement AI chooses the actions.
 7. **Scale from villages to cities**
-   - Profile and optimize the engine, add observability and replay tools, and validate long-running emergent behavior across many seeds.
+   - The first deterministic scale/replay slice is implemented: checkpoints, replay hashes, multi-seed reports, and benchmark metadata. Larger optimization and approved production-scale thresholds remain follow-up work.
 
 ## Agent-assisted development
 

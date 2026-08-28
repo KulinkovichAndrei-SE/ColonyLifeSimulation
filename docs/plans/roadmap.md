@@ -1,18 +1,18 @@
-# Implementation plan: deterministic simulation core
+# Implementation plan: Colony Life Simulation roadmap
 
 - **Specification:** [docs/specs/roadmap.md](../specs/roadmap.md)
 - **Base commit:** `028a209` (Phase 1 foundation)
 - **Working branch:** `codex/agent-development-foundation` (PR #6 head)
-- **Plan status:** Phases 1–6 completed; end-to-end Phase 7 execution is in progress
+- **Plan status:** Phases 1–7 and Pygame integration completed; production-scale optimization remains follow-up work
 - **Last updated:** 2026-08-28
 
 ## 1. Current execution paths and affected state
 
-The legacy path is `main.py -> PygameModule -> InitialGame -> Colony -> Human`. It is display-coupled, uses wall-clock timing, mutates class-level field state, and updates colonies/persons through nested thread pools. The new path is intentionally separate:
+The legacy path is `PygameModule -> InitialGame -> Colony -> Human`. It is display-coupled, uses wall-clock timing, mutates class-level field state, and updates colonies/persons through nested thread pools. The active path is:
 
-`headless_demo.py -> simulation_core.DeterministicSimulation -> clock / RNG / probe state / events / JSON snapshot`
+`main.py -> pygame_app.PygameSimulationApp -> colony_simulation.ColonySimulation -> clock / RNG / people / settlements / events`
 
-No legacy production module is changed in this slice. This keeps the new deterministic seam reviewable and prevents the first core task from silently changing saved chromosome shapes or Pygame behavior.
+The legacy modules remain untouched for comparison, while `main.py` is now an adapter over the deterministic engine. `headless_demo.py` and `colony_demo.py` remain display-free diagnostic consumers of the same explicit transition boundary.
 
 ## 2. Boundaries, data flow, and state transitions
 
@@ -29,18 +29,21 @@ No legacy production module is changed in this slice. This keeps the new determi
 
 `headless_demo.py` is a thin executable consumer. It owns no domain state beyond constructing a configured simulation and printing its canonical output.
 
+`colony_simulation.py` owns people, settlements, resources, memory, learned policies, production, money, research, diplomacy, conflict, snapshots, and replay. `pygame_app.py` owns only input, layout, selection, and rendering. The only world-changing call made by the live UI loop is `simulation.step()`; the AI inside that step chooses resident and settlement actions.
+
 ### State transitions
 
-1. Construction validates configuration and deterministically initializes stable probe-agent positions from the owned seed source.
-2. `step()` advances exactly one tick, processes probe agents in stable ID order, chooses a bounded movement direction from the owned source, updates positions within world bounds, and appends structured events.
-3. `run(n)` repeats `step()` n times; `run(0)` does nothing.
-4. `snapshot()` returns a JSON-compatible, canonical state including schema version, config, tick, positions, and random-source state.
-5. `save_json(path)` writes the versioned snapshot; `load_json(path)` parses and validates all fields before replacing a new instance's state.
-6. A resumed run consumes the stored RNG state and therefore matches an uninterrupted run from the same point.
+1. Construction validates configuration and deterministically initializes people, settlements, resources, relations, and the owned random source.
+2. `step()` advances one tick, processes needs/lifecycle, perception, movement, relationships, autonomous resident and settlement decisions, work, research, food, and invariants in stable order, and appends structured events.
+3. `run(n)` repeats `step()` n times; `run(0)` does nothing. `run_until_winner()` stops when one settlement remains active.
+4. `snapshot()` returns a JSON-compatible canonical state including schema version, people, settlements, jobs, events, and random-source state.
+5. `save_json(path)` writes the versioned snapshot; `load_json(path)` parses and validates fields before replacing a new instance's state.
+6. A resumed run consumes the stored RNG state and therefore matches an uninterrupted run from the same point; checkpoints expose state/event hashes for replay.
+7. `pygame_app.py` renders movement, territory, resources, children, bonds, ledgers, active work, decisions, and learning. Space pauses/restarts, Up/Down adjust speed, and mouse selection only changes the inspector.
 
 ## 3. Ordered vertical slices
 
-### Slice C1 — Core state, clock, seeded randomness, and probe transitions
+### Slice C1 — Core state, clock, seeded randomness, and probe transitions (completed)
 
 - **Dependency:** approved specification and this plan.
 - **Owner:** implementer agent.
@@ -49,7 +52,7 @@ No legacy production module is changed in this slice. This keeps the new determi
 - **Requirements:** REQ-001 through REQ-004 and the domain portion of REQ-006.
 - **Focused check:** display-free import and a direct same-seed operation sequence.
 
-### Slice C2 — Versioned JSON snapshot and headless demo
+### Slice C2 — Versioned JSON snapshot and headless demo (completed)
 
 - **Dependency:** C1.
 - **Owner:** implementer agent, sequentially after C1.
@@ -58,7 +61,7 @@ No legacy production module is changed in this slice. This keeps the new determi
 - **Requirements:** REQ-003, REQ-004, REQ-005, REQ-006, and REQ-007.
 - **Focused check:** run the demo and verify a resumed trace equals uninterrupted output.
 
-### Slice C3 — Deterministic regression coverage
+### Slice C3 — Deterministic regression coverage (completed and extended)
 
 - **Dependency:** C1 and C2.
 - **Owner:** test engineer agent.
@@ -68,12 +71,12 @@ No legacy production module is changed in this slice. This keeps the new determi
 - **Focused check:** `python -m unittest discover -s tests -v`.
 - **Execution note:** the delegated test worker did not return after bounded completion prompts, so the primary agent owns this exact test-file slice for the current working tree; no production scope was expanded.
 
-### Slice C4 — Documentation boundary
+### Slice C4 — Documentation boundary (completed and maintained)
 
 - **Dependency:** C1 through C3.
 - **Owner:** primary agent.
 - **Files:** `README.md` only.
-- **Work:** document the implemented headless core probe and command; explicitly state that legacy Pygame behavior remains, Phase 2 love/reproduction/children are specified but not implemented, and Phase 4 money/market behavior is specified but not implemented.
+- **Work:** document the implemented deterministic probe and multi-phase engine, the Pygame observation contract, autonomous AI ownership, and the remaining legacy migration/scale follow-up.
 - **Requirements:** REQ-007.
 
 ### Slice C5 — Independent evaluation and quality gate
@@ -97,10 +100,10 @@ No legacy production module is changed in this slice. This keeps the new determi
 
 ## 5. Persistence, migration, concurrency, performance, and rollback
 
-- **Persistence:** JSON snapshots are new, versioned, and validated. They contain only core probe state and RNG state; no pickle is read or written.
+- **Persistence:** JSON snapshots are versioned and validated. The Phase 1 probe and full colony engine use separate schemas; no pickle is read or written by the new path.
 - **Migration:** legacy chromosome files remain untouched and are not loaded as core snapshots. A later migration task must choose defaults and compatibility policy before connecting saves.
 - **Concurrency:** the new core is single-owner and single-threaded. It introduces no thread pool or unsynchronized shared collection. Future parallelism must partition ownership first.
-- **Performance:** the probe is intentionally small and correctness-focused. No population-scale performance claim is made; Phase 7 will define benchmark workload and thresholds.
+- **Performance:** Phase 7 records population/world/tick workload, warm-up, repetitions, runtime distribution, and peak memory. No approved production-scale threshold is claimed yet.
 - **Rollback:** new files are isolated from legacy modules. If a defect is found, repair the owning slice, rerun its focused tests, then repeat the relevant evaluation and quality gate.
 
 ## 6. Exact validation commands
@@ -110,24 +113,29 @@ When Python is available:
 ```text
 python -m unittest discover -s tests -v
 python headless_demo.py
-python -m compileall simulation_core.py headless_demo.py tests
+python colony_demo.py
+python -m compileall simulation_core.py colony_simulation.py headless_demo.py colony_demo.py pygame_app.py main.py tests
+SDL_VIDEODRIVER=dummy python main.py --frames 4
+git diff --check
 ```
 
 Expected signals:
 
-- all core tests pass;
+- all deterministic engine and UI adapter tests pass;
 - the demo prints stable JSON state/events and shows tick progression;
+- the phase demo reports children, technology, replay, multi-seed, and benchmark evidence;
 - a snapshot resumed from disk matches uninterrupted canonical output;
-- compilation completes without errors.
+- compilation and diff checks complete without errors;
+- the bounded dummy-display UI exits while showing the active deterministic path.
 
 Repository baseline and graphical checks are separately reported. Bare `python` is not on the PowerShell PATH, but the bundled workspace runtime at `C:\\Users\\kulin\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe` was used for the actual compile, test, demo, and graphical smoke checks.
 
 ## 7. Explicitly deferred work and next task
 
-- Phase 2 implementation: adult life stages, attraction/affinity/love, pair bonding, reproduction attempts, courtship, consent/rejection, pregnancy, gestation, child creation with distinct state, inheritance isolation, childcare, and lifecycle consequences. Before implementation, resolve directed/symmetric affinity, adult/fertility ages, gestation duration, childcare/resource costs, settlement capacity, and missing-partner behavior.
-- Phase 3 cognition and separate memory model.
-- Phase 4 money system: production material/time costs, wallets or treasury, supply/demand pricing, atomic exchange, and eventual legacy settlement integration. Money is not part of this first phase.
-- Technology, diplomacy/conflict, and scale phases.
+- Legacy-path migration: port the deterministic engine's people/settlement state into the old `Human`/`Colony` modules only if compatibility and persistence policy are approved.
+- Richer learning: replace or extend the current explainable learned-policy scores with a reproducible population-training or neural-policy experiment while preserving explicit state ownership.
+- Production scale: establish approved population/world/tick thresholds and optimize only after benchmark workloads and replay constraints are fixed.
+- Richer visualization: add charts, timeline filters, and camera tooling without adding world-changing UI commands.
 
 The implementation continues in this artifact with sequential phase-owned slices. The selected bounded defaults are directed affinity with mutual consent, configurable tick-based lifecycle thresholds, pregnancy retaining the partner genome if the partner disappears, individual wallets plus settlement treasuries, and single-owner deterministic execution.
 
@@ -152,15 +160,15 @@ The full engine is added beside `simulation_core.py` in `colony_simulation.py`. 
 ### Slice P4 — Economy and money
 
 - **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`, `colony_demo.py`.
-- **Work:** recipes, material reservation, labor ticks, storage, wallets, treasuries, demand records, cost-floor quotes, supply pressure, atomic purchases, and event reconstruction.
+- **Work:** recipes, material reservation, labor ticks, bounded storage/logistics capacity, wallets, treasuries, demand records, cost-floor quotes, supply pressure, atomic purchases, incentive-driven specialization metrics, and event reconstruction.
 - **Evidence:** missing-input/labor tests, cost-floor test, fixed-supply demand-price test, replenishment test, conservation and no-partial-side-effect trade tests.
 - **Commit boundary:** Phase 4 commit.
 
 ### Slice P5 — Technology
 
 - **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`.
-- **Work:** prerequisite catalog, funded research jobs, deterministic completion, rule effects, and treaty/contact-gated diffusion.
-- **Evidence:** prerequisite rejection, research ticks/cost, recipe effect, and diffusion ownership tests.
+- **Work:** prerequisite catalog, funded research jobs, deterministic completion/failure, rule effects, and treaty/contact-gated diffusion.
+- **Evidence:** prerequisite rejection, research ticks/cost, deterministic success/failure, recipe effect, and diffusion ownership tests.
 - **Commit boundary:** Phase 5 commit.
 
 ### Slice P6 — Diplomacy and conflict
@@ -173,9 +181,16 @@ The full engine is added beside `simulation_core.py` in `colony_simulation.py`. 
 ### Slice P7 — Scale, replay, and evaluation
 
 - **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`, `colony_demo.py`, `README.md`, verification artifact.
-- **Work:** full snapshots/checkpoints, event hashes, replay comparisons, multi-seed reports, benchmark metadata, and bounded single-owner execution.
-- **Evidence:** checkpoint byte equality, schema validation, explicit 32-seed report, benchmark report fields, compile/test/demo commands.
+- **Work:** full snapshots/checkpoints, event hashes, replay comparisons, explicit 32-seed reports with event/winner/specialization metrics, benchmark metadata, and bounded single-owner execution.
+- **Evidence:** checkpoint immutability/equality, schema validation, 32-seed deterministic report, benchmark report fields, compile/test/demo commands.
 - **Commit boundary:** Phase 7/final verification commit.
+
+### Slice UI — Pygame presentation adapter
+
+- **Files:** `pygame_app.py`, `main.py`, `tests/test_pygame_app.py`, `README.md`.
+- **Work:** replace the old entry path with a renderer/input adapter that calls one explicit deterministic tick, renders map/territory/resources/agents/children, and exposes phase state through a read-only status panel and resident inspector. Keyboard input is limited to pause/restart and speed.
+- **Evidence:** bounded `SDL_VIDEODRIVER=dummy` run exits successfully; UI imports only the new domain engine, does not expose action keys, and does not mutate domain rules directly.
+- **Commit boundary:** UI integration commit after Phase 6 and before final Phase 7 gate.
 
 ## 9. End-to-end requirement traceability
 
@@ -183,14 +198,14 @@ The full engine is added beside `simulation_core.py` in `colony_simulation.py`. 
 | --- | --- | --- |
 | REQ-P2-001..006 | `ColonySimulation` lifecycle and relationship transitions | `tests/test_colony_simulation.py` lifecycle, consent, birth, cleanup, replay cases |
 | REQ-P3-001..005 | `update_perception`, `share_knowledge`, `learn`, agent memory fields | perception, retention, explicit sharing, and isolation tests |
-| REQ-P4-001..007 | recipe/job/ledger/market methods | production, quote, demand, trade, conservation, and event tests |
+| REQ-P4-001..007 | recipe/job/ledger/market/capacity/specialization methods | production, quote, demand, trade, conservation, capacity, specialization metrics, and event tests |
 | REQ-P5-001..004 | technology catalog/research/diffusion methods | prerequisite, progress, effect, and treaty-gated diffusion tests |
 | REQ-P6-001..004 | territory/diplomacy/migration/conflict methods | claim, treaty, migration, trade, memory, and combat tests |
 | REQ-P7-001..004 | snapshot, invariants, `evaluate_seeds`, `benchmark` | replay, report-schema, multi-seed, and benchmark tests |
 
 ## 10. Phase execution validation
 
-Each phase must pass its focused unittest module before its commit. The final gate runs:
+Each phase passed its focused deterministic tests before its phase commit. The final gate runs:
 
 ```text
 python -m unittest discover -s tests -v
@@ -199,4 +214,4 @@ python -m compileall .
 git diff --check
 ```
 
-The graphical `python main.py` smoke test remains optional and is reported separately because the legacy loop requires a display. No phase may claim that Pygame integration is complete until a later adapter task is implemented.
+The graphical smoke test is reported separately because a real display may be unavailable in CI; the bounded dummy-display run is the reproducible UI check. Pygame integration is complete for the active deterministic path, while migration of the legacy comparison loop remains deferred.

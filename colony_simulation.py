@@ -10,9 +10,11 @@ learned policy, genome, settlement knowledge, and economic state separate.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import statistics
 import time
+import tracemalloc
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
@@ -25,7 +27,7 @@ from simulation_core import (
 )
 
 
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
 MAX_MEMORY_ITEMS = 24
 MAX_RELATION_MEMORY = 32
 MATERIAL_PRICES = {"wood": 3, "grain": 4, "stone": 5, "ore": 7}
@@ -86,6 +88,7 @@ class ColonyConfig:
     max_age: int = 40
     gestation_ticks: int = 4
     settlement_capacity: int = 50
+    storage_capacity: int = 100
     perception_radius: int = 4
     affinity_gain: float = 0.12
     consent_threshold: float = 0.55
@@ -95,6 +98,8 @@ class ColonyConfig:
     combat_damage: int = 18
     memory_capacity: int = 24
     memory_ttl: int = 20
+    research_failure_percent: int = 0
+    ai_enabled: bool = True
 
     def __post_init__(self) -> None:
         _require_int(self.seed, "seed")
@@ -110,6 +115,7 @@ class ColonyConfig:
             raise ValueError("max_age must exceed adult_age")
         _positive(self.gestation_ticks, "gestation_ticks")
         _positive(self.settlement_capacity, "settlement_capacity")
+        _positive(self.storage_capacity, "storage_capacity")
         _non_negative(self.perception_radius, "perception_radius")
         if type(self.affinity_gain) not in (int, float) or not math.isfinite(self.affinity_gain):
             raise ValueError("affinity_gain must be finite")
@@ -121,11 +127,15 @@ class ColonyConfig:
             raise ValueError("consent_threshold must be in [0, 1]")
         _non_negative(self.hunger_decay, "hunger_decay")
         _non_negative(self.energy_decay, "energy_decay")
-        if not 0 <= self.mutation_percent <= 100:
+        if not _is_int(self.mutation_percent) or not 0 <= self.mutation_percent <= 100:
             raise ValueError("mutation_percent must be in [0, 100]")
         _positive(self.combat_damage, "combat_damage")
         _positive(self.memory_capacity, "memory_capacity")
         _positive(self.memory_ttl, "memory_ttl")
+        if not _is_int(self.research_failure_percent) or not 0 <= self.research_failure_percent <= 100:
+            raise ValueError("research_failure_percent must be in [0, 100]")
+        if type(self.ai_enabled) is not bool:
+            raise ValueError("ai_enabled must be a boolean")
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -140,6 +150,7 @@ class ColonyConfig:
             "max_age": self.max_age,
             "gestation_ticks": self.gestation_ticks,
             "settlement_capacity": self.settlement_capacity,
+            "storage_capacity": self.storage_capacity,
             "perception_radius": self.perception_radius,
             "affinity_gain": self.affinity_gain,
             "consent_threshold": self.consent_threshold,
@@ -149,6 +160,8 @@ class ColonyConfig:
             "combat_damage": self.combat_damage,
             "memory_capacity": self.memory_capacity,
             "memory_ttl": self.memory_ttl,
+            "research_failure_percent": self.research_failure_percent,
+            "ai_enabled": self.ai_enabled,
         }
 
     @classmethod
@@ -328,6 +341,7 @@ class SettlementState:
     technologies: List[str] = field(default_factory=list)
     territory: List[str] = field(default_factory=list)
     relations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    learned_policy: Dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -338,7 +352,14 @@ class SettlementState:
             "knowledge": self.knowledge,
             "technologies": sorted(self.technologies),
             "territory": sorted(self.territory),
-            "relations": self.relations,
+            "relations": {
+                relation_id: {
+                    **dict(relation),
+                    "memory": [dict(item) for item in relation.get("memory", [])],
+                }
+                for relation_id, relation in sorted(self.relations.items())
+            },
+            "learned_policy": self.learned_policy,
         }
 
     @classmethod
@@ -352,7 +373,14 @@ class SettlementState:
                 knowledge=dict(value["knowledge"]),
                 technologies=list(value["technologies"]),
                 territory=list(value["territory"]),
-                relations={key: dict(item) for key, item in value["relations"].items()},
+                relations={
+                    key: {
+                        **dict(item),
+                        "memory": [dict(memory) for memory in item.get("memory", [])],
+                    }
+                    for key, item in value["relations"].items()
+                },
+                learned_policy={key: float(item) for key, item in value.get("learned_policy", {}).items()},
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise SnapshotValidationError(f"invalid settlement: {exc}") from exc
@@ -528,7 +556,8 @@ class ColonySimulation:
         settlement_ids = sorted(self.settlements)
         for index in range(self.config.population):
             settlement_id = settlement_ids[index % len(settlement_ids)]
-            sex = "female" if index % 2 == 0 else "male"
+            local_index = index // len(settlement_ids)
+            sex = "female" if local_index % 2 == 0 else "male"
             age = self.config.adult_age + self.random.randrange(
                 max(1, self.config.max_age - self.config.adult_age)
             )
@@ -578,10 +607,10 @@ class ColonySimulation:
         self.clock.step()
         self._emit("tick_advanced")
         self._update_needs_and_lifecycle()
-        self._update_childcare()
         self._decay_memory()
         self._update_perception()
-        self._update_relationships()
+        if self.config.ai_enabled:
+            self._run_ai()
         self._update_production()
         self._update_research()
         self._consume_food_for_need()
@@ -613,17 +642,6 @@ class ColonySimulation:
                 if agent.pregnancy_remaining <= 0:
                     self._birth(agent)
 
-    def _update_childcare(self) -> None:
-        for parent in sorted(self.alive_agents, key=lambda item: item.agent_id):
-            for child_id in list(parent.children):
-                child = self.agents.get(child_id)
-                if child is None or not child.alive or child.age >= self.config.adult_age:
-                    continue
-                if child.settlement_id == parent.settlement_id and self._distance(parent, child) <= self.config.perception_radius:
-                    child.hunger = min(100, child.hunger + 3)
-                    parent.energy = max(0, parent.energy - 1)
-                    self._emit("childcare_provided", parent_id=parent.agent_id, child_id=child_id)
-
     def _update_perception(self) -> None:
         radius = self.config.perception_radius
         for agent in sorted(self.alive_agents, key=lambda item: item.agent_id):
@@ -645,6 +663,41 @@ class ColonySimulation:
                     agent.semantic_memory[f"resource:{position}"] = resource
                     agent.semantic_memory_ticks[f"resource:{position}"] = self.tick
                     self._emit("observation_recorded", agent_id=agent.agent_id, subject_id=position)
+
+    def _move_agent(self, agent: AgentState) -> None:
+        """Apply one movement decision selected by the resident policy."""
+
+        directions = (
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        )
+        remembered_positions = []
+        for fact, resource in agent.semantic_memory.items():
+            if not fact.startswith("resource:"):
+                continue
+            position = fact.split(":", 1)[1]
+            if position not in self.resources or resource != self.resources[position]:
+                continue
+            x, y = _split_position(position)
+            remembered_positions.append((abs(agent.x - x) + abs(agent.y - y), x, y))
+        if remembered_positions:
+            _, target_x, target_y = min(remembered_positions)
+            dx = 0 if target_x == agent.x else 1 if target_x > agent.x else -1
+            dy = 0 if target_y == agent.y else 1 if target_y > agent.y else -1
+        else:
+            dx, dy = self.random.choice(directions)
+        old_position = agent.position()
+        agent.x = min(max(agent.x + dx, 0), self.config.width - 1)
+        agent.y = min(max(agent.y + dy, 0), self.config.height - 1)
+        if old_position != agent.position():
+            self._emit("agent_moved", agent_id=agent.agent_id, from_position=old_position, to_position=agent.position())
 
     def _decay_memory(self) -> None:
         for agent in self.alive_agents:
@@ -668,6 +721,14 @@ class ColonySimulation:
                 if first.bond_partner_id is None and second.bond_partner_id is None:
                     if self._consent_score(first, second) >= self.config.consent_threshold and self._consent_score(second, first) >= self.config.consent_threshold:
                         self.courtship(first.agent_id, second.agent_id)
+                if (
+                    first.bond_partner_id == second.agent_id
+                    and second.bond_partner_id == first.agent_id
+                    and first.pregnancy_remaining is None
+                    and second.pregnancy_remaining is None
+                    and first.sex != second.sex
+                ):
+                    self.request_reproduction(first.agent_id, second.agent_id)
 
     def _update_production(self) -> None:
         for job_id in sorted(list(self.production_jobs)):
@@ -726,10 +787,21 @@ class ColonySimulation:
             if job.remaining_ticks > 0:
                 continue
             settlement = self.settlements[job.settlement_id]
+            if self.random.randrange(100) < self.config.research_failure_percent:
+                del self.research_jobs[job_id]
+                self._emit(
+                    "research_failed",
+                    job_id=job_id,
+                    settlement_id=job.settlement_id,
+                    technology=job.technology,
+                    reason="experiment_failed",
+                )
+                continue
             if job.technology not in settlement.technologies:
                 settlement.technologies.append(job.technology)
                 settlement.technologies.sort()
             del self.research_jobs[job_id]
+            self._emit("research_succeeded", job_id=job_id, settlement_id=job.settlement_id, technology=job.technology)
             self._emit("technology_unlocked", settlement_id=job.settlement_id, technology=job.technology)
 
     def _consume_food_for_need(self) -> None:
@@ -737,12 +809,279 @@ class ColonySimulation:
             if agent.hunger >= 45:
                 continue
             settlement = self.settlements[agent.settlement_id]
-            if settlement.storage.get("food", 0) <= 0:
+            source = "settlement"
+            if settlement.storage.get("food", 0) <= 0 and agent.inventory.get("food", 0) > 0:
+                source = "inventory"
+            if (settlement.storage.get("food", 0) if source == "settlement" else agent.inventory.get("food", 0)) <= 0:
                 self._emit("need_unmet", agent_id=agent.agent_id, need="food")
                 continue
-            settlement.storage["food"] -= 1
+            if source == "settlement":
+                settlement.storage["food"] -= 1
+            else:
+                agent.inventory["food"] -= 1
             agent.hunger = min(100, agent.hunger + 35)
-            self._emit("need_met", agent_id=agent.agent_id, need="food")
+            self._emit("need_met", agent_id=agent.agent_id, need="food", source=source)
+
+    def _run_ai(self) -> None:
+        """Let agents and settlements select actions from current state."""
+
+        self._run_agent_ai()
+        self._update_relationships()
+        self._run_settlement_ai()
+
+    def _run_agent_ai(self) -> None:
+        for agent in sorted(self.alive_agents, key=lambda item: item.agent_id):
+            if agent.age == 0:
+                # Birth is an observable empty-state boundary.  Caregivers may
+                # act on a newborn, but the newborn learns on later ticks.
+                continue
+            scores = self._agent_action_scores(agent)
+            action = max(scores, key=lambda item: (scores[item], item))
+            self._emit("agent_decision", agent_id=agent.agent_id, action=action, scores={key: round(value, 4) for key, value in sorted(scores.items())})
+            reward = self._apply_agent_action(agent, action)
+            previous = agent.learned_policy.get(action, 0.0)
+            updated = _clamp(previous + 0.2 * (reward - previous), -1.0, 1.0)
+            agent.learned_policy[action] = round(updated, 6)
+            self._emit("learning_updated", agent_id=agent.agent_id, action=action, reward=round(reward, 4), value=agent.learned_policy[action])
+
+    def _agent_action_scores(self, agent: AgentState) -> Dict[str, float]:
+        same_settlement_adults = [
+            other for other in self.alive_agents
+            if other.agent_id != agent.agent_id and other.settlement_id == agent.settlement_id and self._is_adult(other)
+        ]
+        settlement = self.settlements[agent.settlement_id]
+        scores = {
+            "move": 0.35 + agent.genome[2] / 500 + (0.45 if agent.job_id is None else 0.0),
+            "produce": 0.25 + agent.genome[0] / 500,
+            "socialize": 0.15 + (0.35 if same_settlement_adults else 0.0) + agent.affinity.get(agent.bond_partner_id or "", 0.0) * 0.2,
+            "care": 0.1 + (0.6 if any(child_id in agent.children for child_id in self.agents) else 0.0),
+            "trade": 0.1 + max(0, 50 - agent.hunger) / 50 + max(0, 3 - settlement.storage.get("food", 0)) * 0.1,
+            "learn": 0.2 + (0.4 if agent.memory else 0.0) + agent.genome[3] / 500,
+        }
+        for action, value in agent.learned_policy.items():
+            if action in scores:
+                scores[action] += value * 0.25
+        if agent.job_id is not None:
+            scores["produce"] = -1.0
+        return scores
+
+    def _apply_agent_action(self, agent: AgentState, action: str) -> float:
+        if action == "move":
+            self._move_agent(agent)
+            return 0.35
+        if action == "produce":
+            recipe_name = self._best_recipe_for(agent)
+            if recipe_name and self.start_production(agent.agent_id, recipe_name):
+                return 0.6
+            return -0.1
+        if action == "socialize":
+            candidates = [
+                other for other in self.alive_agents
+                if other.agent_id != agent.agent_id and other.settlement_id == agent.settlement_id
+            ]
+            if candidates:
+                other = min(candidates, key=lambda item: (self._distance(agent, item), item.agent_id))
+                return self.interact(agent.agent_id, other.agent_id, "ai_conversation")
+            return 0.0
+        if action == "care":
+            before = agent.energy
+            self._update_childcare_for(agent)
+            return 0.4 if agent.energy < before else 0.0
+        if action == "trade":
+            settlement = self.settlements[agent.settlement_id]
+            self.record_demand(settlement.settlement_id, "food", 1)
+            return 0.25 if self.buy_good(agent.agent_id, settlement.settlement_id, "food", 1) else -0.05
+        if action == "learn":
+            self.learn(agent.agent_id, "adaptation", 1)
+            return 0.3
+        return 0.1
+
+    def _update_childcare_for(self, parent: AgentState) -> None:
+        for child_id in parent.children:
+            child = self.agents.get(child_id)
+            if child is None or not child.alive or child.age >= self.config.adult_age:
+                continue
+            if child.settlement_id == parent.settlement_id and self._distance(parent, child) <= self.config.perception_radius:
+                child.hunger = min(100, child.hunger + 3)
+                parent.energy = max(0, parent.energy - 1)
+                self._emit("childcare_provided", parent_id=parent.agent_id, child_id=child_id)
+
+    def _best_recipe_for(self, agent: AgentState) -> Optional[str]:
+        settlement = self.settlements[agent.settlement_id]
+        candidates: List[Tuple[float, str]] = []
+        for recipe_name, recipe in RECIPES.items():
+            if any(settlement.storage.get(good, 0) < quantity for good, quantity in recipe.inputs.items()):
+                continue
+            effective = self._effective_recipe(settlement, recipe_name)
+            shortage = sum(max(0, 4 - settlement.storage.get(good, 0)) + settlement.demand.get(good, 0) for good in effective.output)
+            candidates.append((shortage + agent.skills.get(recipe_name, 0) * 0.25, recipe_name))
+        return max(candidates, key=lambda item: (item[0], item[1]))[1] if candidates else None
+
+    def _run_settlement_ai(self) -> None:
+        ids = sorted(self.settlements)
+        for settlement_id in ids:
+            settlement = self.settlements[settlement_id]
+            population = self._settlement_population(settlement_id)
+            food_shortage = max(0, population * 2 - settlement.storage.get("food", 0))
+            action = "produce" if food_shortage else "research" if self.research_jobs_for(settlement_id) is None else "observe"
+            if food_shortage:
+                self.record_demand(settlement_id, "food", max(1, food_shortage))
+                self.allocate_jobs(settlement_id)
+            elif self.research_jobs_for(settlement_id) is None:
+                researcher = next((agent for agent in sorted(self.alive_agents, key=lambda item: item.agent_id) if agent.settlement_id == settlement_id and self._is_adult(agent) and agent.job_id is None), None)
+                technology = self._next_research_target(settlement)
+                if researcher is not None and technology is not None:
+                    self.start_research(researcher.agent_id, technology)
+            for agent in sorted(self.alive_agents, key=lambda item: item.agent_id):
+                if agent.settlement_id == settlement_id:
+                    self.claim_territory(settlement_id, agent.x, agent.y)
+                    break
+            self._run_ai_migration(settlement_id)
+            previous = settlement.learned_policy.get(action, 0.0)
+            settlement.learned_policy[action] = round(_clamp(previous + 0.15 * (1.0 if food_shortage == 0 else -0.2), -1.0, 1.0), 6)
+            self._emit("settlement_decision", settlement_id=settlement_id, action=action, food_shortage=food_shortage, policy=settlement.learned_policy[action])
+        for index, first_id in enumerate(ids):
+            for second_id in ids[index + 1 :]:
+                relation = self.settlements[first_id].relations[second_id]
+                if relation["treaty"] == "war":
+                    self.resolve_conflict(first_id, second_id)
+                    continue
+                if self.tick % 5 == 0:
+                    first_score = self._settlement_strength(first_id)
+                    second_score = self._settlement_strength(second_id)
+                    if self.tick >= 20 and abs(first_score - second_score) >= 3:
+                        attacker = first_id if first_score > second_score else second_id
+                        defender = second_id if attacker == first_id else first_id
+                        self.declare_conflict(attacker, defender)
+                    elif relation["treaty"] == "neutral":
+                        self.negotiate(first_id, second_id, "trade")
+                relation = self.settlements[first_id].relations[second_id]
+                if relation["treaty"] in {"trade", "alliance"}:
+                    self._run_ai_exchange(first_id, second_id)
+                    self._run_ai_diffusion(first_id, second_id)
+
+    def _run_ai_exchange(self, first_id: str, second_id: str) -> None:
+        """Let a treaty-connected pair react to a real food imbalance."""
+
+        settlements = self.settlements
+        candidates = ((first_id, second_id), (second_id, first_id))
+        for buyer_id, seller_id in candidates:
+            buyer_settlement = settlements[buyer_id]
+            seller_settlement = settlements[seller_id]
+            buyer_need = max(0, self._settlement_population(buyer_id) * 2 - buyer_settlement.storage.get("food", 0))
+            seller_surplus = seller_settlement.storage.get("food", 0) - self._settlement_population(seller_id)
+            if buyer_need <= 0 or seller_surplus <= 0:
+                continue
+            buyer = next(
+                (
+                    agent
+                    for agent in sorted(self.alive_agents, key=lambda item: item.agent_id)
+                    if agent.settlement_id == buyer_id and self._is_adult(agent)
+                ),
+                None,
+            )
+            if buyer is None:
+                continue
+            self.record_demand(buyer_id, "food", 1)
+            if self.buy_good(buyer.agent_id, seller_id, "food", 1):
+                self._emit(
+                    "settlement_trade_decision",
+                    buyer_settlement_id=buyer_id,
+                    seller_settlement_id=seller_id,
+                    good="food",
+                    reason="food_imbalance",
+                )
+                return
+
+    def _run_ai_diffusion(self, first_id: str, second_id: str) -> None:
+        """Share one useful technology when diplomacy makes it available."""
+
+        first = self.settlements[first_id]
+        second = self.settlements[second_id]
+        for source_id, target_id in ((first_id, second_id), (second_id, first_id)):
+            source = self.settlements[source_id]
+            target = self.settlements[target_id]
+            for technology in sorted(source.technologies):
+                if technology not in target.technologies and self.share_technology(source_id, target_id, technology):
+                    self._emit(
+                        "settlement_knowledge_decision",
+                        source_settlement_id=source_id,
+                        target_settlement_id=target_id,
+                        knowledge=f"technology:{technology}",
+                    )
+                    return
+
+    def _run_ai_migration(self, settlement_id: str) -> None:
+        """Move one resident toward a treaty-compatible settlement with food surplus."""
+
+        current = self.settlements[settlement_id]
+        population = self._settlement_population(settlement_id)
+        shortage = max(0, population * 2 - current.storage.get("food", 0))
+        if shortage <= 0 or population <= 1:
+            return
+        targets = []
+        for target_id, target in sorted(self.settlements.items()):
+            if target_id == settlement_id:
+                continue
+            relation = current.relations[target_id]
+            surplus = target.storage.get("food", 0) - self._settlement_population(target_id) * 2
+            if relation["treaty"] != "war" and surplus > 0 and self._settlement_population(target_id) < self.config.settlement_capacity:
+                targets.append((-surplus, target_id))
+        if not targets:
+            return
+        migrant = next(
+            (
+                agent
+                for agent in sorted(self.alive_agents, key=lambda item: item.agent_id, reverse=True)
+                if agent.settlement_id == settlement_id
+                and self._is_adult(agent)
+                and agent.job_id is None
+                and agent.pregnancy_remaining is None
+            ),
+            None,
+        )
+        if migrant is None:
+            return
+        _, target_id = min(targets)
+        if self.migrate(migrant.agent_id, target_id):
+            self._emit(
+                "settlement_migration_decision",
+                settlement_id=settlement_id,
+                agent_id=migrant.agent_id,
+                target_settlement_id=target_id,
+                reason="food_shortage",
+            )
+
+    def research_jobs_for(self, settlement_id: str) -> Optional[ResearchJob]:
+        return next((job for job in self.research_jobs.values() if job.settlement_id == settlement_id), None)
+
+    def _next_research_target(self, settlement: SettlementState) -> Optional[str]:
+        for technology, details in TECHNOLOGIES.items():
+            if technology not in settlement.technologies and all(item in settlement.technologies for item in details["prerequisites"]):
+                return technology
+        return None
+
+    def _settlement_strength(self, settlement_id: str) -> int:
+        settlement = self.settlements[settlement_id]
+        population = self._settlement_population(settlement_id)
+        genome_strength = sum(agent.genome[0] for agent in self.alive_agents if agent.settlement_id == settlement_id) // 40
+        return population * 2 + settlement.treasury // 20 + len(settlement.technologies) * 3 + len(settlement.territory) + genome_strength
+
+    def winner(self) -> Optional[str]:
+        active = [settlement_id for settlement_id in sorted(self.settlements) if self._settlement_population(settlement_id) > 0]
+        return active[0] if len(active) == 1 else None
+
+    @property
+    def game_over(self) -> bool:
+        return self.winner() is not None or self.alive_population == 0
+
+    def run_until_winner(self, max_steps: int = 1000) -> Optional[str]:
+        limit = _positive(max_steps, "max_steps")
+        for _ in range(limit):
+            if self.game_over:
+                return self.winner()
+            self.step()
+        return self.winner()
 
     def interact(self, first_id: str, second_id: str, interaction: str = "conversation") -> float:
         first = self._agent(first_id)
@@ -949,18 +1288,35 @@ class ColonySimulation:
         labor_cost = recipe.labor_ticks * 2
         return {"material_cost": material_cost, "labor_cost": labor_cost, "cost_floor": material_cost + labor_cost, "labor_ticks": recipe.labor_ticks}
 
+    def _settlement_goods_load(self, settlement_id: str) -> int:
+        settlement = self.settlements[settlement_id]
+        stored = sum(settlement.storage.values())
+        reserved = sum(
+            sum(job.reserved_inputs.values())
+            for job in self.production_jobs.values()
+            if job.settlement_id == settlement_id
+        )
+        return stored + reserved
+
     def start_production(self, agent_id: str, recipe_name: str) -> Optional[str]:
         agent = self._agent(agent_id)
         if recipe_name not in RECIPES:
             raise ValueError(f"unknown recipe: {recipe_name}")
         if agent.job_id is not None:
             raise ValueError("agent already has a production job")
+        if any(job.agent_id == agent_id for job in self.research_jobs.values()):
+            self._emit("production_rejected", agent_id=agent_id, recipe=recipe_name, reason="worker_busy")
+            return None
         settlement = self.settlements[agent.settlement_id]
         recipe = self._effective_recipe(settlement, recipe_name)
         for good, quantity in recipe.inputs.items():
             if settlement.storage.get(good, 0) < quantity:
                 self._emit("production_rejected", agent_id=agent_id, recipe=recipe_name, reason="missing_input")
                 return None
+        goods_load_after_completion = self._settlement_goods_load(agent.settlement_id) - sum(recipe.inputs.values()) + sum(recipe.output.values())
+        if goods_load_after_completion > self.config.storage_capacity:
+            self._emit("production_rejected", agent_id=agent_id, recipe=recipe_name, reason="storage_capacity")
+            return None
         for good, quantity in recipe.inputs.items():
             settlement.storage[good] -= quantity
         costs = self.production_cost(recipe_name, agent.settlement_id)
@@ -1053,6 +1409,8 @@ class ColonySimulation:
         buyer.wallet -= total
         seller.treasury += total
         buyer.inventory[good] = buyer.inventory.get(good, 0) + amount
+        buyer_ledger = self.settlements[buyer.settlement_id]
+        buyer_ledger.demand[good] = max(0, buyer_ledger.demand.get(good, 0) - amount)
         seller.demand[good] = max(0, seller.demand.get(good, 0) - amount)
         self._record_relation_memory(buyer.settlement_id, seller_settlement_id, "trade", good=good, amount=amount)
         self._emit("trade_completed", buyer_id=buyer_id, seller_settlement_id=seller_settlement_id, good=good, quantity=amount, total=total)
@@ -1075,6 +1433,9 @@ class ColonySimulation:
             return None
         if any(job.settlement_id == agent.settlement_id for job in self.research_jobs.values()):
             raise ValueError("settlement already has a research job")
+        if agent.job_id is not None:
+            self._emit("research_rejected", settlement_id=agent.settlement_id, technology=technology, reason="worker_busy")
+            return None
         settlement.treasury -= TECHNOLOGIES[technology]["cost"]
         job_id = f"research-{self._next_research_number:04d}"
         self._next_research_number += 1
@@ -1086,8 +1447,20 @@ class ColonySimulation:
         source = self._settlement(source_settlement_id)
         target = self._settlement(target_settlement_id)
         relation = source.relations[target_settlement_id]
-        if technology not in source.technologies or relation["treaty"] not in {"trade", "alliance"}:
-            self._emit("technology_diffusion_rejected", source_settlement_id=source_settlement_id, target_settlement_id=target_settlement_id, technology=technology)
+        prerequisites = TECHNOLOGIES.get(technology, {}).get("prerequisites", ())
+        if (
+            technology not in TECHNOLOGIES
+            or technology not in source.technologies
+            or relation["treaty"] not in {"trade", "alliance"}
+            or any(item not in target.technologies for item in prerequisites)
+        ):
+            self._emit(
+                "technology_diffusion_rejected",
+                source_settlement_id=source_settlement_id,
+                target_settlement_id=target_settlement_id,
+                technology=technology,
+                reason="prerequisites_or_contact",
+            )
             return False
         target.technologies = sorted(set(target.technologies) | {technology})
         target.knowledge[f"technology:{technology}"] = source_settlement_id
@@ -1155,6 +1528,10 @@ class ColonySimulation:
             for good, quantity in job.reserved_inputs.items():
                 current.storage[good] = current.storage.get(good, 0) + quantity
             agent.job_id = None
+        for job_id, research_job in list(self.research_jobs.items()):
+            if research_job.agent_id == agent.agent_id:
+                del self.research_jobs[job_id]
+                self._emit("research_cancelled", job_id=job_id, reason="researcher_migrated")
         old_settlement = agent.settlement_id
         agent.settlement_id = target_settlement_id
         self._record_relation_memory(old_settlement, target_settlement_id, "migration", agent_id=agent_id)
@@ -1203,6 +1580,56 @@ class ColonySimulation:
                 del relation["memory"][:-MAX_RELATION_MEMORY]
 
     # Phase 7: invariant observability, snapshots, replay, evaluation, and benchmarks.
+    def specialization_metrics(self) -> Dict[str, Any]:
+        """Summarize incentive-driven recipe focus without assigning professions."""
+
+        by_settlement: Dict[str, Dict[str, int]] = {}
+        dominant: Dict[str, Optional[str]] = {}
+        focus: Dict[str, Dict[str, Any]] = {}
+        for settlement_id in sorted(self.settlements):
+            skills = {
+                recipe_name: sum(
+                    agent.skills.get(recipe_name, 0)
+                    for agent in self.agents.values()
+                    if agent.settlement_id == settlement_id
+                )
+                for recipe_name in sorted(RECIPES)
+            }
+            by_settlement[settlement_id] = skills
+            positive = [(value, recipe_name) for recipe_name, value in skills.items() if value > 0]
+            dominant[settlement_id] = max(positive)[1] if positive else None
+            total_skill = sum(skills.values())
+            dominant_skill = max((value for value, _ in positive), default=0)
+            focus[settlement_id] = {
+                "dominant_recipe": dominant[settlement_id],
+                "dominant_share": round(dominant_skill / total_skill, 6) if total_skill else 0.0,
+                "skill_total": total_skill,
+                "storage_load": self._settlement_goods_load(settlement_id),
+                "storage_capacity": self.config.storage_capacity,
+                "capacity_utilization": round(self._settlement_goods_load(settlement_id) / self.config.storage_capacity, 6),
+            }
+        active_recipe_types = sum(
+            1 for recipe_skills in by_settlement.values() for value in recipe_skills.values() if value > 0
+        )
+        production_by_recipe: Dict[str, int] = {}
+        incentive_events = {"demand_recorded": 0, "jobs_allocated": 0, "production_started": 0}
+        for event in self.events:
+            if event.event_type == "production_started":
+                recipe_name = event.payload.get("recipe")
+                if isinstance(recipe_name, str):
+                    production_by_recipe[recipe_name] = production_by_recipe.get(recipe_name, 0) + 1
+                incentive_events["production_started"] += 1
+            elif event.event_type in incentive_events:
+                incentive_events[event.event_type] += 1
+        return {
+            "settlement_recipe_skill": by_settlement,
+            "dominant_recipe": dominant,
+            "settlement_focus": focus,
+            "active_recipe_types": active_recipe_types,
+            "production_by_recipe": dict(sorted(production_by_recipe.items())),
+            "incentive_events": incentive_events,
+        }
+
     def invariants(self) -> Dict[str, Any]:
         reserved_goods: Dict[str, int] = {}
         for job in self.production_jobs.values():
@@ -1225,6 +1652,7 @@ class ColonySimulation:
             "event_count": len(self.events),
             "production_jobs": len(self.production_jobs),
             "research_jobs": len(self.research_jobs),
+            "specialization": self.specialization_metrics(),
         }
 
     def _assert_invariants(self) -> None:
@@ -1233,6 +1661,27 @@ class ColonySimulation:
         sequences = [event.sequence for event in self.events]
         if sequences != list(range(1, len(sequences) + 1)):
             raise AssertionError("event sequence is not canonical")
+        if len(self.agents) < self.config.population:
+            raise AssertionError("snapshot lost configured initial agents")
+        if len(self.settlements) != self.config.settlement_count:
+            raise AssertionError("settlement count does not match configuration")
+        event_ticks = [event.tick for event in self.events]
+        if event_ticks != sorted(event_ticks):
+            raise AssertionError("event ticks are not monotonic")
+        settlement_ids = set(self.settlements)
+        for agent in self.agents.values():
+            if agent.settlement_id not in settlement_ids:
+                raise AssertionError("agent references an unknown settlement")
+        for job in self.production_jobs.values():
+            if job.settlement_id not in settlement_ids or job.agent_id not in self.agents:
+                raise AssertionError("production job references unknown ownership")
+            if self.agents[job.agent_id].job_id != job.job_id:
+                raise AssertionError("production job is not linked to its worker")
+        for job in self.research_jobs.values():
+            if job.settlement_id not in settlement_ids or job.agent_id not in self.agents:
+                raise AssertionError("research job references unknown ownership")
+            if self.agents[job.agent_id].settlement_id != job.settlement_id:
+                raise AssertionError("research job worker is outside its settlement")
         for agent in self.agents.values():
             if not 0 <= agent.x < self.config.width or not 0 <= agent.y < self.config.height:
                 raise AssertionError("agent left world bounds")
@@ -1260,6 +1709,52 @@ class ColonySimulation:
 
     def canonical_json(self) -> str:
         return canonical_json(self.snapshot())
+
+    def state_hash(self) -> str:
+        """Return a stable hash for checkpoint/replay comparisons."""
+
+        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+
+    def event_hash(self) -> str:
+        return hashlib.sha256(
+            canonical_json([event.as_dict() for event in self.events]).encode("utf-8")
+        ).hexdigest()
+
+    def checkpoint(self) -> Dict[str, Any]:
+        """Capture a complete replay checkpoint at the current tick."""
+
+        return {
+            "tick": self.tick,
+            "state_hash": self.state_hash(),
+            "event_hash": self.event_hash(),
+            "snapshot": self.snapshot(),
+            "invariants": self.invariants(),
+        }
+
+    def run_checkpoints(self, steps: int, interval: int) -> Dict[int, Dict[str, Any]]:
+        count = _non_negative(steps, "steps")
+        cadence = _positive(interval, "checkpoint interval")
+        final_tick = self.tick + count
+        checkpoints: Dict[int, Dict[str, Any]] = {self.tick: self.checkpoint()}
+        for _ in range(count):
+            self.step()
+            if self.tick % cadence == 0 or self.tick == final_tick:
+                checkpoints[self.tick] = self.checkpoint()
+        return checkpoints
+
+    @classmethod
+    def replay_checkpoint(cls, checkpoint: Mapping[str, Any], steps: int) -> Dict[str, Any]:
+        if not isinstance(checkpoint, Mapping) or "snapshot" not in checkpoint:
+            raise SnapshotValidationError("checkpoint must contain a snapshot")
+        simulation = cls.from_snapshot(checkpoint["snapshot"])
+        simulation.run(steps)
+        return {
+            "tick": simulation.tick,
+            "state_hash": simulation.state_hash(),
+            "event_hash": simulation.event_hash(),
+            "snapshot": simulation.snapshot(),
+            "invariants": simulation.invariants(),
+        }
 
     def save_json(self, path: Union[str, Path]) -> None:
         Path(path).write_text(self.canonical_json(), encoding="utf-8")
@@ -1297,7 +1792,16 @@ class ColonySimulation:
                 if settlement.settlement_id in simulation.settlements:
                     raise SnapshotValidationError("duplicate settlement id")
                 simulation.settlements[settlement.settlement_id] = settlement
-            simulation.resources = {str(key): str(value) for key, value in snapshot["resources"].items()}
+            if not isinstance(snapshot["resources"], Mapping):
+                raise SnapshotValidationError("resources must be an object")
+            simulation.resources = {}
+            for key, value in snapshot["resources"].items():
+                if not isinstance(key, str) or value not in {"wood", "grain"}:
+                    raise SnapshotValidationError("resource keys and values must be strings from the resource catalog")
+                resource_x, resource_y = _split_position(key)
+                if not 0 <= resource_x < config.width or not 0 <= resource_y < config.height:
+                    raise SnapshotValidationError("resource position is out of bounds")
+                simulation.resources[key] = value
             simulation.production_jobs = {}
             for raw_job in snapshot["production_jobs"]:
                 job = ProductionJob.from_dict(raw_job)
@@ -1312,14 +1816,16 @@ class ColonySimulation:
                 simulation.research_jobs[job.job_id] = job
             simulation.events = []
             previous_sequence = 0
+            previous_tick = 0
             for raw_event in snapshot["events"]:
                 sequence = _positive(raw_event["sequence"], "event sequence")
                 event_tick = _non_negative(raw_event["tick"], "event tick")
-                if sequence != previous_sequence + 1 or event_tick > tick:
+                if sequence != previous_sequence + 1 or event_tick < previous_tick or event_tick > tick:
                     raise SnapshotValidationError("event stream is not ordered")
                 event = DomainEvent(sequence, event_tick, raw_event["event_type"], dict(raw_event["payload"]))
                 simulation.events.append(event)
                 previous_sequence = sequence
+                previous_tick = event_tick
             if next_event != previous_sequence + 1:
                 raise SnapshotValidationError("next event sequence does not follow event stream")
         except (KeyError, TypeError, ValueError) as exc:
@@ -1327,7 +1833,10 @@ class ColonySimulation:
         simulation._next_event_sequence = next_event
         simulation._next_job_number = next_job
         simulation._next_research_number = next_research
-        simulation._assert_invariants()
+        try:
+            simulation._assert_invariants()
+        except (AssertionError, KeyError, TypeError, ValueError) as exc:
+            raise SnapshotValidationError(f"invalid colony snapshot invariants: {exc}") from exc
         return simulation
 
     @classmethod
@@ -1346,29 +1855,71 @@ class ColonySimulation:
         results = []
         for seed in seeds:
             simulation = cls(replace(config, seed=seed)).run(steps)
-            results.append({"seed": seed, **simulation.invariants()})
+            event_counts: Dict[str, int] = {}
+            for event in simulation.events:
+                event_counts[event.event_type] = event_counts.get(event.event_type, 0) + 1
+            results.append(
+                {
+                    "seed": seed,
+                    **simulation.invariants(),
+                    "winner": simulation.winner(),
+                    "event_counts": dict(sorted(event_counts.items())),
+                }
+            )
         populations = [item["alive_population"] for item in results]
+        event_totals: Dict[str, int] = {}
+        winners: Dict[str, int] = {}
+        for item in results:
+            for event_type, count in item["event_counts"].items():
+                event_totals[event_type] = event_totals.get(event_type, 0) + count
+            if item["winner"] is not None:
+                winners[item["winner"]] = winners.get(item["winner"], 0) + 1
+        specialization_values = [item["specialization"]["active_recipe_types"] for item in results]
         return {
+            "world": {"width": config.width, "height": config.height, "population": config.population, "settlements": config.settlement_count},
             "steps": steps,
+            "sample_size": len(results),
             "runs": results,
             "alive_population": {"min": min(populations) if populations else 0, "mean": statistics.mean(populations) if populations else 0, "max": max(populations) if populations else 0},
+            "emergence_metrics": {
+                "event_totals": dict(sorted(event_totals.items())),
+                "winner_distribution": dict(sorted(winners.items())),
+                "specialization_active_recipe_types": {
+                    "min": min(specialization_values) if specialization_values else 0,
+                    "mean": statistics.mean(specialization_values) if specialization_values else 0,
+                    "max": max(specialization_values) if specialization_values else 0,
+                },
+            },
         }
 
     @classmethod
-    def benchmark(cls, config: ColonyConfig, ticks: int, repetitions: int = 3) -> Dict[str, Any]:
+    def benchmark(cls, config: ColonyConfig, ticks: int, repetitions: int = 3, warm_up: int = 2) -> Dict[str, Any]:
         _non_negative(ticks, "ticks")
         _positive(repetitions, "repetitions")
-        durations: List[float] = []
-        for index in range(repetitions):
-            started = time.perf_counter()
+        _non_negative(warm_up, "warm_up")
+        for index in range(warm_up):
             cls(replace(config, seed=config.seed + index)).run(ticks)
+        durations: List[float] = []
+        peaks: List[int] = []
+        for index in range(repetitions):
+            tracemalloc.start()
+            started = time.perf_counter()
+            cls(replace(config, seed=config.seed + warm_up + index)).run(ticks)
             durations.append(time.perf_counter() - started)
+            _, peak = tracemalloc.get_traced_memory()
+            peaks.append(peak)
+            tracemalloc.stop()
+        sorted_durations = sorted(durations)
+        p95_index = max(0, min(len(sorted_durations) - 1, math.ceil(len(sorted_durations) * 0.95) - 1))
         return {
+            "world": {"width": config.width, "height": config.height},
             "population": config.population,
             "settlements": config.settlement_count,
             "ticks": ticks,
+            "warm_up": warm_up,
             "repetitions": repetitions,
-            "seconds": {"min": min(durations), "mean": statistics.mean(durations), "max": max(durations)},
+            "seconds": {"min": min(durations), "mean": statistics.mean(durations), "median": statistics.median(durations), "p95": sorted_durations[p95_index], "max": max(durations)},
+            "peak_memory_bytes": {"min": min(peaks), "mean": statistics.mean(peaks), "max": max(peaks)},
         }
 
 

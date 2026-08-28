@@ -52,6 +52,83 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertGreater(second.affinity[first.agent_id], 0)
         self.assertEqual(simulation.events[-1].event_type, "interaction")
 
+    def test_residents_move_deterministically_each_tick(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        before = agent.position()
+
+        simulation.run(2)
+        after = agent.position()
+        repeated = self.fixture(population=1, settlement_count=1)
+        repeated.run(2)
+
+        self.assertNotEqual(before, after)
+        self.assertEqual(after, repeated.agents["agent-0000"].position())
+        self.assertTrue(any(event.event_type == "agent_moved" for event in simulation.events))
+
+    def test_ai_makes_autonomous_resident_and_settlement_decisions(self):
+        simulation = self.fixture(population=2, settlement_count=1)
+        before = {agent.agent_id: agent.position() for agent in simulation.alive_agents}
+
+        simulation.run(3)
+
+        after = {agent.agent_id: agent.position() for agent in simulation.alive_agents}
+        self.assertTrue(any(before[agent_id] != position for agent_id, position in after.items()))
+        self.assertTrue(any(event.event_type == "agent_decision" for event in simulation.events))
+        self.assertTrue(any(event.event_type == "learning_updated" for event in simulation.events))
+        self.assertTrue(any(event.event_type == "settlement_decision" for event in simulation.events))
+        self.assertTrue(any(agent.learned_policy for agent in simulation.alive_agents))
+
+    def test_ai_run_can_reach_single_settlement_winner(self):
+        simulation = self.fixture(population=4, settlement_count=2)
+
+        winner = simulation.run_until_winner(120)
+
+        self.assertIn(winner, simulation.settlements)
+        self.assertTrue(simulation.game_over)
+        self.assertEqual(sum(1 for settlement_id in simulation.settlements if simulation._settlement_population(settlement_id) > 0), 1)
+
+    def test_ai_uses_treaty_for_trade_and_technology_diffusion(self):
+        simulation = self.fixture(population=4, settlement_count=2, max_age=200)
+        first = simulation.settlements["settlement-000"]
+        second = simulation.settlements["settlement-001"]
+        simulation.negotiate(first.settlement_id, second.settlement_id, "trade")
+        first.storage["food"] = 0
+        second.storage["food"] = 20
+        first.technologies = []
+        second.technologies = ["agriculture"]
+
+        simulation.step()
+
+        self.assertTrue(any(event.event_type == "trade_completed" for event in simulation.events))
+        self.assertTrue(any(event.event_type == "technology_diffused" for event in simulation.events))
+        self.assertTrue(any(event.event_type == "settlement_trade_decision" for event in simulation.events))
+
+    def test_ai_can_choose_migration_from_food_pressure(self):
+        simulation = self.fixture(population=4, settlement_count=2, max_age=200)
+        current = simulation.settlements["settlement-000"]
+        target = simulation.settlements["settlement-001"]
+        current.storage.update({"food": 0, "grain": 0, "wood": 0, "stone": 0})
+        target.storage["food"] = 20
+
+        simulation.step()
+
+        self.assertTrue(any(event.event_type == "settlement_migration_decision" for event in simulation.events))
+        self.assertEqual(sum(1 for agent in simulation.alive_agents if agent.settlement_id == current.settlement_id), 1)
+
+    def test_storage_capacity_and_specialization_are_observable(self):
+        simulation = self.fixture(population=1, settlement_count=1, storage_capacity=26)
+        agent = simulation.agents["agent-0000"]
+
+        self.assertIsNone(simulation.start_production(agent.agent_id, "bread"))
+        self.assertTrue(any(event.payload.get("reason") == "storage_capacity" for event in simulation.events))
+        metrics = simulation.specialization_metrics()
+        self.assertIn("active_recipe_types", metrics)
+        self.assertIn("settlement-000", metrics["settlement_recipe_skill"])
+        self.assertIn("dominant_share", metrics["settlement_focus"]["settlement-000"])
+        self.assertIn("capacity_utilization", metrics["settlement_focus"]["settlement-000"])
+        self.assertIn("demand_recorded", metrics["incentive_events"])
+
     def test_rejected_courtship_has_no_bond_or_pregnancy(self):
         simulation = self.fixture(population=2, settlement_count=1, consent_threshold=0.99)
         first = simulation.agents["agent-0000"]
@@ -268,6 +345,33 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertIn("agriculture", settlement.technologies)
         self.assertTrue(any(event.event_type == "technology_unlocked" for event in simulation.events))
 
+    def test_research_can_fail_after_consuming_deterministic_cost(self):
+        simulation = self.fixture(population=1, settlement_count=1, research_failure_percent=100)
+        agent = simulation.agents["agent-0000"]
+        settlement = simulation.settlements[agent.settlement_id]
+        treasury_before = settlement.treasury
+
+        self.assertIsNotNone(simulation.start_research(agent.agent_id, "agriculture"))
+        simulation.run(2)
+
+        self.assertEqual(settlement.treasury, treasury_before - 4)
+        self.assertNotIn("agriculture", settlement.technologies)
+        self.assertTrue(any(event.event_type == "research_failed" for event in simulation.events))
+
+    def test_research_and_production_cannot_share_one_worker(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+
+        self.assertIsNotNone(simulation.start_research(agent.agent_id, "agriculture"))
+        self.assertIsNone(simulation.start_production(agent.agent_id, "bread"))
+        self.assertEqual(len(simulation.production_jobs), 0)
+
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        self.assertIsNotNone(simulation.start_production(agent.agent_id, "bread"))
+        self.assertIsNone(simulation.start_research(agent.agent_id, "agriculture"))
+        self.assertEqual(len(simulation.research_jobs), 0)
+
     def test_technology_changes_recipe_effects(self):
         simulation = self.fixture(population=1, settlement_count=1)
         settlement = simulation.settlements["settlement-000"]
@@ -299,6 +403,12 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertNotIn("technology:agriculture", source.knowledge)
         self.assertEqual(target.knowledge["technology:agriculture"], source.settlement_id)
 
+        source.technologies = ["agriculture", "metalworking"]
+        target.technologies = []
+        self.assertFalse(simulation.share_technology(source.settlement_id, target.settlement_id, "metalworking"))
+        target.technologies = ["agriculture"]
+        self.assertTrue(simulation.share_technology(source.settlement_id, target.settlement_id, "metalworking"))
+
     def test_territory_claims_and_migration_are_explicit(self):
         simulation = self.fixture(population=2, settlement_count=2)
         first = simulation.settlements["settlement-000"]
@@ -313,6 +423,17 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertIn("2,2", first.territory)
         self.assertTrue(any(event.event_type == "agent_migrated" for event in simulation.events))
 
+    def test_migration_cancels_research_owned_by_the_moving_worker(self):
+        simulation = self.fixture(population=2, settlement_count=2)
+        migrant = simulation.agents["agent-0000"]
+        research_id = simulation.start_research(migrant.agent_id, "agriculture")
+
+        self.assertIsNotNone(research_id)
+        self.assertTrue(simulation.migrate(migrant.agent_id, "settlement-001"))
+
+        self.assertNotIn(research_id, simulation.research_jobs)
+        self.assertTrue(any(event.event_type == "research_cancelled" and event.payload["reason"] == "researcher_migrated" for event in simulation.events))
+
     def test_trade_between_settlements_requires_treaty(self):
         simulation = self.fixture(population=2, settlement_count=2)
         buyer = simulation.agents["agent-0000"]
@@ -323,6 +444,7 @@ class ColonySimulationTests(unittest.TestCase):
         simulation.negotiate(buyer.settlement_id, seller.settlement_id, "trade")
         self.assertTrue(simulation.buy_good(buyer.agent_id, seller.settlement_id, "food", 1))
         self.assertEqual(buyer.inventory["food"], 1)
+        self.assertEqual(simulation.settlements[buyer.settlement_id].demand.get("food", 0), 0)
         relation = simulation.settlements[buyer.settlement_id].relations[seller.settlement_id]
         self.assertTrue(relation["memory"])
         self.assertEqual(relation["memory"][-1]["kind"], "trade")
@@ -351,6 +473,40 @@ class ColonySimulationTests(unittest.TestCase):
         relation = simulation.settlements[attacker.settlement_id].relations[defender.settlement_id]
         self.assertTrue(any(item["kind"] == "combat" for item in relation["memory"]))
 
+    def test_checkpoint_replay_matches_uninterrupted_state_and_events(self):
+        config = ColonyConfig(seed=41, population=4, settlement_count=2, adult_age=2)
+        source = ColonySimulation(config).run(2)
+        checkpoint = source.checkpoint()
+        uninterrupted = ColonySimulation(config).run(5)
+
+        replayed = ColonySimulation.replay_checkpoint(checkpoint, 3)
+
+        self.assertEqual(replayed["tick"], uninterrupted.tick)
+        self.assertEqual(replayed["state_hash"], uninterrupted.state_hash())
+        self.assertEqual(replayed["event_hash"], uninterrupted.event_hash())
+        self.assertEqual(checkpoint["tick"], 2)
+
+    def test_checkpoint_cadence_and_multi_seed_report_are_explicit(self):
+        simulation = self.fixture(population=2, settlement_count=1)
+        checkpoints = simulation.run_checkpoints(5, 2)
+        report = ColonySimulation.evaluate_seeds(simulation.config, [1, 2, 3], 3)
+
+        self.assertEqual(sorted(checkpoints), [0, 2, 4, 5])
+        self.assertEqual(report["sample_size"], 3)
+        self.assertEqual(report["steps"], 3)
+        self.assertEqual(report["world"]["width"], simulation.config.width)
+        self.assertIn("event_totals", report["emergence_metrics"])
+
+    def test_benchmark_report_contains_workload_warmup_repetitions_and_memory(self):
+        report = ColonySimulation.benchmark(self.fixture(population=2, settlement_count=1).config, ticks=2, repetitions=2, warm_up=1)
+
+        self.assertEqual(report["ticks"], 2)
+        self.assertEqual(report["warm_up"], 1)
+        self.assertEqual(report["repetitions"], 2)
+        self.assertIn("median", report["seconds"])
+        self.assertIn("p95", report["seconds"])
+        self.assertIn("peak_memory_bytes", report)
+
     def test_full_snapshot_round_trip_and_resume(self):
         config = ColonyConfig(seed=91, population=4, settlement_count=2, adult_age=2, fertility_start=2)
         checkpoint = ColonySimulation(config).run(3)
@@ -371,6 +527,34 @@ class ColonySimulationTests(unittest.TestCase):
 
         with self.assertRaises(SnapshotValidationError):
             ColonySimulation.from_snapshot(snapshot)
+
+        snapshot = simulation.snapshot()
+        snapshot["agents"] = []
+        with self.assertRaises(SnapshotValidationError):
+            ColonySimulation.from_snapshot(snapshot)
+
+        snapshot = simulation.snapshot()
+        snapshot["events"][0]["tick"] = 1
+        snapshot["events"][1]["tick"] = 0
+        with self.assertRaises(SnapshotValidationError):
+            ColonySimulation.from_snapshot(snapshot)
+
+        snapshot = simulation.snapshot()
+        resource_position = next(iter(snapshot["resources"]))
+        snapshot["resources"][resource_position] = 123
+        with self.assertRaises(SnapshotValidationError):
+            ColonySimulation.from_snapshot(snapshot)
+
+    def test_checkpoint_replay_does_not_mutate_checkpoint_relation_memory(self):
+        simulation = self.fixture(population=4, settlement_count=2).run(5)
+        checkpoint = simulation.checkpoint()
+        before = checkpoint["state_hash"]
+
+        first = ColonySimulation.replay_checkpoint(checkpoint, 3)
+        second = ColonySimulation.replay_checkpoint(checkpoint, 3)
+
+        self.assertEqual(first["state_hash"], second["state_hash"])
+        self.assertEqual(checkpoint["state_hash"], before)
 
 
 if __name__ == "__main__":

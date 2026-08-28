@@ -1,6 +1,6 @@
-# Colony Life Simulation roadmap, core, and relationships
+# Colony Life Simulation roadmap
 
-- **Status:** End-to-end execution underway; Phases 1 through 6 are implemented in the headless path, and Phase 7 remains sequenced work.
+- **Status:** Phases 1 through 7 are implemented in the deterministic path and consumed by the Pygame observation UI; production-scale optimization and richer learning remain follow-up work.
 - **Owner:** Maintainer / primary agent
 - **Base commit:** `028a209` on `codex/agent-development-foundation` (PR #6, base `master`)
 - **Last updated:** 2026-08-28
@@ -10,7 +10,7 @@
 
 ### Implemented in the current checkout
 
-The legacy application starts from `main.py`, creates a Pygame world in `InitialGame`, populates a fixed `73 x 33` `FieldProcessing` grid, and updates `Colony` and `Human` objects from `PygameModule`. The code confirms:
+The legacy application baseline (before this roadmap increment) started from `main.py`, created a Pygame world in `InitialGame`, populated a fixed `73 x 33` `FieldProcessing` grid, and updated `Colony` and `Human` objects from `PygameModule`. The baseline code confirmed:
 
 - Four colonies are created with five men and five women each.
 - People have health, hunger, age-like `day`, fitness, skill counters, inventories, known fields, and neural-network chromosomes.
@@ -18,21 +18,25 @@ The legacy application starts from `main.py`, creates a Pygame world in `Initial
 - `Human.build()` immediately spends 50 shared `Tree` units and creates a `House`; it has no money, seller, buyer, demand, or production duration.
 - Resource extraction and movement use wall-clock time and class-level mutable state; colony/person work uses nested thread pools.
 - `Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm` exist but are not connected to the active loop.
-- Chromosome persistence is unversioned pickle storage. There is no headless runner or automated test suite.
+- Chromosome persistence is unversioned pickle storage. The baseline had no headless runner or automated test suite; the active roadmap path adds both beside the legacy modules.
 
 The baseline compile/test command was attempted during specification work but could not run because this host has no `python` executable on PATH. This is `NOT RUN`, not a passing result.
 
 ### Specified by this document
 
-The roadmap is divided into seven capability phases. Phase 2 explicitly includes reproduction, children, pair bonding, love/affinity, consent, pregnancy, birth, and inheritance. Phase 4 explicitly includes the requested money system. Phases 1 and 2 are now in scope for the current implementation pass; later phases remain specified until their own gates pass.
+The roadmap is divided into seven capability phases. Phase 2 explicitly includes reproduction, children, pair bonding, love/affinity, consent, pregnancy, birth, and inheritance. Phase 4 explicitly includes the requested money system. The current deterministic path has completed bounded slices for all seven phases; the specification remains the contract for future expansion and for keeping implemented behavior distinct from roadmap intent.
 
-### Roadmap, not current behavior
+### Current implementation boundary
 
-The deterministic headless engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, Phase 3 bounded cognition/memory rules, Phase 4 production/economy rules, Phase 5 research/technology rules, and Phase 6 diplomacy/conflict rules. City-scale behavior is not claimed to exist until the Phase 7 gate passes.
+The deterministic engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, Phase 3 bounded cognition/memory rules, Phase 4 production/money rules, Phase 5 research/technology rules, Phase 6 diplomacy/conflict rules, and Phase 7 checkpoint/replay/evaluation rules. `pygame_app.py` consumes that state and events for the playable UI. Agents and settlements select actions autonomously through deterministic state scores and updated learned-policy values. The current implementation does not claim a production-scale performance threshold or opaque neural-network training.
 
 ## 2. Product goal and user value
 
-Turn the prototype into a deterministic, observable artificial-life simulation where material constraints, time, needs, relationships, learning, and selection create behavior that is not scripted as a story. The first product slice establishes a display-free core so later lifecycle, love/reproduction, and market rules can be tested and replayed before they are connected to Pygame.
+Turn the prototype into a deterministic, observable artificial-life simulation where material constraints, time, needs, relationships, learning, and selection create behavior that is not scripted as a story. The active product path is a Pygame observation surface over a display-independent engine: the user can pause, resume, change speed, and inspect residents, but the AI owns world actions.
+
+### AI control contract
+
+The simulation, rather than the UI, owns all world-changing decisions. Each living resident chooses among movement, production, social interaction, childcare, trade, and learning from current needs, perception, relationship state, skills, genome-derived tendencies, and its bounded learned policy. Each settlement chooses job allocation, research, territory claims, treaty-backed exchange, technology diffusion, migration pressure, and conflict responses from population, resources, treasury, technology, territory, and relation state. Successful or unsuccessful actions update the relevant learned-policy values and emit decision/learning events. This is an explainable deterministic policy-learning slice; a future neural or population-training implementation must preserve the same state ownership and replay contract.
 
 ## 3. Phased implementation specification
 
@@ -82,7 +86,7 @@ Turn the prototype into a deterministic, observable artificial-life simulation w
 
 **Purpose:** let settlements discover and diffuse capabilities instead of receiving hard-coded unlocks.
 
-**Specified capabilities:** discoverable knowledge, prerequisites, experimentation cost/risk, research work, diffusion through contact/trade, and technologies that alter actions, recipes, or efficiency.
+**Specified capabilities:** discoverable knowledge, prerequisites, experimentation cost/risk, deterministic research success/failure records, research work, diffusion through contact/trade, and technologies that alter actions, recipes, or efficiency.
 
 **Phase gate:** prerequisites and discovery are enforced, experimentation is deterministic under replay, and technology ownership remains distinct from individual memory, genome, and learned behavior.
 
@@ -110,7 +114,7 @@ Turn the prototype into a deterministic, observable artificial-life simulation w
 
 ## 4. Current increment: deterministic simulation core
 
-The first six vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a headless lifecycle/relationship engine, bounded cognition/memory, a production/economy engine, a technology engine, and diplomacy/conflict rules. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, learned policy, material/labor production, incentive-based jobs, wallets/treasuries, demand pricing, atomic trade, prerequisite-gated research, recipe effects, treaty-gated diffusion, territory claims, migration, persistent relation memory, and deterministic combat. It does not replace the Pygame loop; scale/replay evaluation remains the final task with a separate gate.
+The seven vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a lifecycle/relationship engine, bounded cognition/memory, a production/money engine, a technology engine, diplomacy/conflict rules, and checkpoint/replay/evaluation support. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, learned policy, material/labor production, incentive-based jobs, bounded storage capacity, wallets/treasuries, demand pricing, atomic trade, specialization focus/capacity metrics, prerequisite-gated research with deterministic success/failure, recipe effects, treaty-gated diffusion, territory claims, migration, persistent relation memory, deterministic combat, replay hashes, 32-seed outcome metrics, and benchmark metadata. `pygame_app.py` observes and renders those rules without owning transitions; production-scale optimization and thresholds remain follow-up work.
 
 ### In scope
 
@@ -125,7 +129,7 @@ The first six vertical slices implement a pure-Python deterministic clock, seed-
 ### Out of scope for this increment
 
 - Cognition beyond the current bounded observations, memory TTL, learning, and explicit sharing hooks.
-- Buildings beyond the current recipe/storage economy, plus scale integration.
+- Buildings beyond the current recipe/storage economy, plus production-scale optimization and approved performance claims.
 - Automatic integration of legacy neural-network decisions with the new core.
 - Migration of legacy chromosome pickle files; no new compatibility commitment is made for those files.
 
@@ -168,7 +172,7 @@ Configuration MUST validate positive world dimensions, non-negative population, 
 
 ### REQ-007 — Regression tests and documentation
 
-The repository MUST include dependency-light deterministic tests for clock boundaries, seed repeatability, changed-seed behavior, bounded movement, snapshot round-trip/resume, schema rejection, and no-display import. The README MUST label the core probe as implemented and Phase 2 love/reproduction and Phase 4 money as specified/deferred.
+The repository MUST include dependency-light deterministic tests for clock boundaries, seed repeatability, changed-seed behavior, bounded movement, snapshot round-trip/resume, schema rejection, and no-display import. It MUST also test lifecycle, learning, production/money, research, diplomacy, autonomous decisions, and the observation-only Pygame adapter. The README MUST distinguish implemented deterministic phases from deferred legacy migration and future scale work.
 
 ## 7. Invariants and explicit failure behavior
 
@@ -183,15 +187,14 @@ The repository MUST include dependency-light deterministic tests for clock bound
 
 ## 8. Observability, configuration, and persistence
 
-The implementation exposes seed, world dimensions, population, current tick, stable probe-agent positions, random-source state, ordered events, and schema version. JSON snapshots support deterministic resume/replay and inspection. Existing chromosome pickle files remain untouched and are not treated as compatible core snapshots. No money, production, love, or reproduction state is persisted by this increment.
+The implementation exposes seed, world dimensions, population, current tick, stable people and settlement identifiers, positions, needs, relationships, wallets, storage, technology, territory, jobs, learned policies, random-source state, ordered events, and schema version. Full JSON snapshots support deterministic resume/replay and inspection. Existing chromosome pickle files remain untouched and are not treated as compatible core snapshots.
 
 ## 9. Risks, assumptions, and open decisions
 
 - **Non-blocking assumption:** the first headless probe uses bounded deterministic movement solely to prove the core seam; it does not replace `Human` behavior.
 - **Non-blocking risk:** the legacy Pygame loop still has wall-clock and concurrency defects. This foundation isolates new logic but does not claim to repair those paths.
-- **Blocking Phase 2 decision:** choose symmetric pair affinity, two directed preferences, or both; recommended first model is directed affinity plus a mutual-consent threshold.
-- **Blocking Phase 2 decision:** define adult age, fertility, gestation duration, childcare/resource costs, settlement capacity, and failure behavior if a partner disappears.
-- **Blocking Phase 4 decision:** choose colony treasury, individual wallets, or both; choose whether labor is paid or represented only as cost basis.
+- **Resolved Phase 2 decision:** directed affinity plus a mutual-consent threshold; adult/fertility ages, gestation duration, childcare/resource costs, settlement capacity, and missing-partner genome retention are configurable and tested.
+- **Resolved Phase 4 decision:** individual wallets plus settlement treasuries; labor is an explicit time cost foundation and is not silently minted as money.
 - **Non-blocking decision:** currency display name and price formatting.
 
 ## 10. Acceptance criteria
@@ -204,8 +207,8 @@ The implementation exposes seed, world dimensions, population, current tick, sta
 | AC-004 / REQ-004 | Given a tick transition, when events and snapshot are inspected, then stable sequence/order and canonical JSON-compatible state are present. | Event/snapshot tests. |
 | AC-005 / REQ-005 | Given a saved versioned JSON snapshot, when it is loaded into a new core and resumed, then subsequent output matches an uninterrupted run; malformed/unsupported data is rejected. | Round-trip/resume and validation tests. |
 | AC-006 / REQ-006 | Given invalid dimensions, population, seed, boolean-as-integer values, or step count, when construction/advance is attempted, then it fails before state mutation. | Boundary validation tests. |
-| AC-007 / REQ-007 | Given the docs and tests, when the new core is used, then current core behavior is labeled implemented and Phase 2 love/reproduction plus Phase 4 money are labeled specified/deferred. | README review and test command evidence. |
+| AC-007 / REQ-007 | Given the docs and tests, when the active engine is used, then implemented phases, autonomous AI ownership, the observation-only UI contract, and deferred legacy/scale work are clearly labeled. | README/roadmap review and full test/evaluation evidence. |
 
 ## 11. Deferred roadmap work
 
-The next task after this increment is the Phase 7 scale/replay slice. Cognition, economy, technology, diplomacy, and conflict are implemented in the headless path; scale integration and long-run evidence remain deferred.
+The seven roadmap phases now have deterministic headless rules and a Pygame consumer. Remaining follow-up work is legacy-path migration, richer visualization, production-scale optimization, and maintainer-approved long-run thresholds.

@@ -1,10 +1,7 @@
-from PygameModule import  *
+"""Application entry point for the deterministic colony Pygame UI."""
+
+from pygame_app import main
 
 
 if __name__ == "__main__":
-    while True:
-        pygame_module = PygameModule(InitialGame())
-        pygame_module.start_game()
-
-        if pygame_module.get_status_break_event():
-            break
+    raise SystemExit(main())
