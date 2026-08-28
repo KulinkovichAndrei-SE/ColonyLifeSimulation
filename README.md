@@ -31,8 +31,9 @@ Version 1.0 implements the first prototype loop:
 - Phase 3 cognition in the same headless engine: bounded perception, private episodic memory with deterministic TTL, semantic facts, explicit settlement knowledge sharing, and learned policy state isolated from genomes.
 - Phase 4 economy in the same headless engine: recipes, material reservation, labor ticks, incentive-based job allocation, wallets, settlement treasuries, demand pressure, material/time cost floors, and atomic purchases.
 - Phase 5 technology in the same headless engine: prerequisite-gated research, tick/resource costs, recipe effects, and treaty-gated diffusion.
+- Phase 6 diplomacy/conflict in the same headless engine: territory claims, treaties, migration, cross-settlement trade gates, persistent relation memory, deterministic combat, injury/death, and territory transfer.
 
-The deterministic core and Phases 2–5 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Diplomacy, conflict, and scale remain later roadmap phases.
+The deterministic core and Phases 2–6 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Scale/replay evaluation remains the final roadmap phase.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -105,6 +106,7 @@ The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay
 - Bounded perception, episodic/semantic memory, learning, and explicit settlement knowledge sharing are implemented in the headless Phase 3 engine but are not wired into the legacy Pygame loop.
 - Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and atomic trade are implemented in the headless Phase 4 engine but are not wired into the legacy Pygame loop.
 - Technology prerequisites, research, recipe effects, and treaty-gated diffusion are implemented in the headless Phase 5 engine but are not wired into the legacy Pygame loop.
+- Territory claims, treaties, migration, trade gates, relation memory, and deterministic conflict consequences are implemented in the headless Phase 6 engine but are not wired into the legacy Pygame loop.
 - Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
 
 The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md).
@@ -130,7 +132,7 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
 5. **Research technologies**
    - The first headless technology slice is implemented: prerequisites, funded research ticks, rule effects, and treaty/contact-gated diffusion. Legacy integration remains deferred.
 6. **Add diplomacy and conflict**
-   - Model claims, trade, alliances, migration, resource pressure, combat, and persistent inter-settlement memory.
+   - The first headless diplomacy/conflict slice is implemented: claims, trade gates, treaties, migration, resource-pressure decisions, combat, and persistent inter-settlement memory. Legacy integration remains deferred.
 7. **Scale from villages to cities**
    - Profile and optimize the engine, add observability and replay tools, and validate long-running emergent behavior across many seeds.
 

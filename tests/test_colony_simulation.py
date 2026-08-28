@@ -299,6 +299,58 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertNotIn("technology:agriculture", source.knowledge)
         self.assertEqual(target.knowledge["technology:agriculture"], source.settlement_id)
 
+    def test_territory_claims_and_migration_are_explicit(self):
+        simulation = self.fixture(population=2, settlement_count=2)
+        first = simulation.settlements["settlement-000"]
+        second = simulation.settlements["settlement-001"]
+        migrant = simulation.agents["agent-0000"]
+
+        self.assertTrue(simulation.claim_territory(first.settlement_id, 2, 2))
+        self.assertFalse(simulation.claim_territory(second.settlement_id, 2, 2))
+        self.assertTrue(simulation.migrate(migrant.agent_id, second.settlement_id))
+
+        self.assertEqual(migrant.settlement_id, second.settlement_id)
+        self.assertIn("2,2", first.territory)
+        self.assertTrue(any(event.event_type == "agent_migrated" for event in simulation.events))
+
+    def test_trade_between_settlements_requires_treaty(self):
+        simulation = self.fixture(population=2, settlement_count=2)
+        buyer = simulation.agents["agent-0000"]
+        seller = simulation.settlements["settlement-001"]
+        seller.storage["food"] = 3
+
+        self.assertFalse(simulation.buy_good(buyer.agent_id, seller.settlement_id, "food", 1))
+        simulation.negotiate(buyer.settlement_id, seller.settlement_id, "trade")
+        self.assertTrue(simulation.buy_good(buyer.agent_id, seller.settlement_id, "food", 1))
+        self.assertEqual(buyer.inventory["food"], 1)
+        relation = simulation.settlements[buyer.settlement_id].relations[seller.settlement_id]
+        self.assertTrue(relation["memory"])
+        self.assertEqual(relation["memory"][-1]["kind"], "trade")
+
+    def test_conflict_injures_and_can_transfer_territory_without_creating_assets(self):
+        simulation = self.fixture(population=2, settlement_count=2, combat_damage=120)
+        attacker = simulation.settlements["settlement-000"]
+        defender = simulation.settlements["settlement-001"]
+        defender_agent = simulation.agents["agent-0001"]
+        attacker_agent = simulation.agents["agent-0000"]
+        defender_agent.health = 100
+        attacker_agent.health = 100
+        simulation.claim_territory(defender.settlement_id, 4, 4)
+        money_before = simulation.invariants()["total_money"]
+        goods_before = simulation.invariants()["goods"]
+
+        simulation.declare_conflict(attacker.settlement_id, defender.settlement_id)
+        winner = simulation.resolve_conflict(attacker.settlement_id, defender.settlement_id)
+
+        self.assertEqual(winner, attacker.settlement_id)
+        self.assertFalse(defender_agent.alive)
+        self.assertIn("4,4", attacker.territory)
+        self.assertNotIn("4,4", defender.territory)
+        self.assertEqual(simulation.invariants()["total_money"], money_before)
+        self.assertEqual(simulation.invariants()["goods"], goods_before)
+        relation = simulation.settlements[attacker.settlement_id].relations[defender.settlement_id]
+        self.assertTrue(any(item["kind"] == "combat" for item in relation["memory"]))
+
     def test_full_snapshot_round_trip_and_resume(self):
         config = ColonyConfig(seed=91, population=4, settlement_count=2, adult_age=2, fertility_start=2)
         checkpoint = ColonySimulation(config).run(3)
