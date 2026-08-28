@@ -27,8 +27,9 @@ Version 1.0 implements the first prototype loop:
 - Parallel colony and person updates using Python thread pools.
 - A visual status panel showing each colony's color and shared resources.
 - A separate display-free deterministic core probe in `simulation_core.py` with explicit ticks, seeded randomness, structured events, and versioned JSON snapshots; `headless_demo.py` demonstrates deterministic checkpoint/resume.
+- A separate display-free multi-phase engine in `colony_simulation.py` with tick-driven needs, aging, death, directed affinity, consent, pair bonding, pregnancy, birth, childcare hooks, and isolated genome inheritance.
 
-The deterministic core is an implemented infrastructure slice, not yet a replacement for the legacy Pygame simulation. It intentionally does not claim to implement human lifecycle, love, reproduction, children, or the economy.
+The deterministic core and Phase 2 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Cognition, money/economy, technology, diplomacy, conflict, and scale remain later roadmap phases.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -93,10 +94,11 @@ The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay
 - Shared mutable state is updated from nested thread pools without an explicit synchronization model.
 - The deterministic core has a dependency-light test suite, but the legacy simulation still lacks complete integration coverage, dependency locking, packaging metadata, CI, and a benchmark harness.
 - Population evolution changes chromosomes of existing people; biological reproduction and inheritance are not modeled yet.
+- The headless Phase 2 engine models biological reproduction and inheritance separately from the legacy chromosome evolution path.
 - Skills are counters only and do not yet change productivity or unlock behavior.
 - Legacy persistence uses unversioned pickle files and assumes the `save/` directory already exists; the new core uses versioned JSON snapshots but does not migrate chromosome saves.
 - Advanced resources and buildings are defined but disabled or unused.
-- Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are specified for Phase 2 but are not current features.
+- Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are implemented in the headless Phase 2 engine but are not wired into the legacy Pygame loop.
 - Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and trade are specified for Phase 4 but are not current features.
 - Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
 

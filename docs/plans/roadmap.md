@@ -1,9 +1,9 @@
 # Implementation plan: deterministic simulation core
 
 - **Specification:** [docs/specs/roadmap.md](../specs/roadmap.md)
-- **Base commit:** `1f17f67f8e3d891e603606f8edd577231d5a17a6`
+- **Base commit:** `028a209` (Phase 1 foundation)
 - **Working branch:** `codex/agent-development-foundation` (PR #6 head)
-- **Plan status:** Approved for the current bounded Phase 1 increment
+- **Plan status:** Phase 1 plan completed; end-to-end Phase 2–7 execution is in progress
 - **Last updated:** 2026-08-28
 
 ## 1. Current execution paths and affected state
@@ -129,4 +129,74 @@ Repository baseline and graphical checks are separately reported. Bare `python` 
 - Phase 4 money system: production material/time costs, wallets or treasury, supply/demand pricing, atomic exchange, and eventual legacy settlement integration. Money is not part of this first phase.
 - Technology, diplomacy/conflict, and scale phases.
 
-The next task-by-task artifact should use a separate Phase 2 slug or extend this roadmap only after the maintainer confirms the relationship/reproduction decisions.
+The implementation continues in this artifact with sequential phase-owned slices. The selected bounded defaults are directed affinity with mutual consent, configurable tick-based lifecycle thresholds, pregnancy retaining the partner genome if the partner disappears, individual wallets plus settlement treasuries, and single-owner deterministic execution.
+
+## 8. End-to-end phase execution plan
+
+The full engine is added beside `simulation_core.py` in `colony_simulation.py`. The Phase 1 probe remains a regression seam; the full engine uses a separate snapshot schema and never loads legacy pickle data.
+
+### Slice P2 — Lifecycle and relationships
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`, `README.md`, roadmap artifacts.
+- **Work:** tick-driven needs, injury/death cleanup, directed affinity, courtship/consent, bonds, gestation, birth, childcare, crossover/mutation, and atomic ownership updates.
+- **Evidence:** exact-tick lifecycle fixtures, consent rejection, birth/inheritance isolation, partner-loss, cleanup, and snapshot/resume tests.
+- **Commit boundary:** Phase 2 commit before cognition work.
+
+### Slice P3 — Cognition and memory
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`.
+- **Work:** bounded perception, episodic retention, semantic facts, explicit sharing, deterministic learning, and non-aliasing between personal and settlement knowledge.
+- **Evidence:** hidden-resource perception and memory TTL tests, explicit-share-only test, learned-policy/genome isolation test.
+- **Commit boundary:** Phase 3 commit.
+
+### Slice P4 — Economy and money
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`, `colony_demo.py`.
+- **Work:** recipes, material reservation, labor ticks, storage, wallets, treasuries, demand records, cost-floor quotes, supply pressure, atomic purchases, and event reconstruction.
+- **Evidence:** missing-input/labor tests, cost-floor test, fixed-supply demand-price test, replenishment test, conservation and no-partial-side-effect trade tests.
+- **Commit boundary:** Phase 4 commit.
+
+### Slice P5 — Technology
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`.
+- **Work:** prerequisite catalog, funded research jobs, deterministic completion, rule effects, and treaty/contact-gated diffusion.
+- **Evidence:** prerequisite rejection, research ticks/cost, recipe effect, and diffusion ownership tests.
+- **Commit boundary:** Phase 5 commit.
+
+### Slice P6 — Diplomacy and conflict
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`.
+- **Work:** territory claims, treaties, migration, trade gating, persistent inter-settlement memories, deterministic combat, injury/death, and territory transfer.
+- **Evidence:** claim/treaty/migration/trade fixtures, relation-memory separation, combat casualty and money/resource conservation tests.
+- **Commit boundary:** Phase 6 commit.
+
+### Slice P7 — Scale, replay, and evaluation
+
+- **Files:** `colony_simulation.py`, `tests/test_colony_simulation.py`, `colony_demo.py`, `README.md`, verification artifact.
+- **Work:** full snapshots/checkpoints, event hashes, replay comparisons, multi-seed reports, benchmark metadata, and bounded single-owner execution.
+- **Evidence:** checkpoint byte equality, schema validation, explicit 32-seed report, benchmark report fields, compile/test/demo commands.
+- **Commit boundary:** Phase 7/final verification commit.
+
+## 9. End-to-end requirement traceability
+
+| Requirement group | Production owner | Tests/evaluation |
+| --- | --- | --- |
+| REQ-P2-001..006 | `ColonySimulation` lifecycle and relationship transitions | `tests/test_colony_simulation.py` lifecycle, consent, birth, cleanup, replay cases |
+| REQ-P3-001..005 | `update_perception`, `share_knowledge`, `learn`, agent memory fields | perception, retention, explicit sharing, and isolation tests |
+| REQ-P4-001..007 | recipe/job/ledger/market methods | production, quote, demand, trade, conservation, and event tests |
+| REQ-P5-001..004 | technology catalog/research/diffusion methods | prerequisite, progress, effect, and treaty-gated diffusion tests |
+| REQ-P6-001..004 | territory/diplomacy/migration/conflict methods | claim, treaty, migration, trade, memory, and combat tests |
+| REQ-P7-001..004 | snapshot, invariants, `evaluate_seeds`, `benchmark` | replay, report-schema, multi-seed, and benchmark tests |
+
+## 10. Phase execution validation
+
+Each phase must pass its focused unittest module before its commit. The final gate runs:
+
+```text
+python -m unittest discover -s tests -v
+python colony_demo.py
+python -m compileall .
+git diff --check
+```
+
+The graphical `python main.py` smoke test remains optional and is reported separately because the legacy loop requires a display. No phase may claim that Pygame integration is complete until a later adapter task is implemented.
