@@ -250,6 +250,55 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertTrue(all(job_id in simulation.production_jobs for job_id in jobs))
         self.assertEqual(len(jobs), 2)
 
+    def test_research_requires_prerequisites_and_consumes_ticks_and_funds(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        settlement = simulation.settlements[agent.settlement_id]
+        treasury_before = settlement.treasury
+
+        self.assertIsNone(simulation.start_research(agent.agent_id, "metalworking"))
+        self.assertNotIn("metalworking", settlement.technologies)
+        research_id = simulation.start_research(agent.agent_id, "agriculture")
+        self.assertIsNotNone(research_id)
+        self.assertEqual(settlement.treasury, treasury_before - 4)
+
+        simulation.step()
+        self.assertNotIn("agriculture", settlement.technologies)
+        simulation.step()
+        self.assertIn("agriculture", settlement.technologies)
+        self.assertTrue(any(event.event_type == "technology_unlocked" for event in simulation.events))
+
+    def test_technology_changes_recipe_effects(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        settlement = simulation.settlements["settlement-000"]
+        agent = simulation.agents["agent-0000"]
+        settlement.technologies = []
+        simulation.start_production(agent.agent_id, "bread")
+        simulation.run(2)
+        food_without_technology = settlement.storage["food"]
+
+        settlement.technologies = ["agriculture"]
+        agent.job_id = None
+        simulation.start_production(agent.agent_id, "bread")
+        simulation.run(2)
+
+        self.assertEqual(settlement.storage["food"] - food_without_technology, 3)
+
+    def test_technology_diffuses_only_after_diplomatic_contact(self):
+        simulation = self.fixture(population=2, settlement_count=2)
+        source = simulation.settlements["settlement-000"]
+        target = simulation.settlements["settlement-001"]
+        source.technologies = ["agriculture"]
+
+        self.assertFalse(simulation.share_technology(source.settlement_id, target.settlement_id, "agriculture"))
+        self.assertNotIn("agriculture", target.technologies)
+        simulation.negotiate(source.settlement_id, target.settlement_id, "trade")
+
+        self.assertTrue(simulation.share_technology(source.settlement_id, target.settlement_id, "agriculture"))
+        self.assertIn("agriculture", target.technologies)
+        self.assertNotIn("technology:agriculture", source.knowledge)
+        self.assertEqual(target.knowledge["technology:agriculture"], source.settlement_id)
+
     def test_full_snapshot_round_trip_and_resume(self):
         config = ColonyConfig(seed=91, population=4, settlement_count=2, adult_age=2, fertility_start=2)
         checkpoint = ColonySimulation(config).run(3)
