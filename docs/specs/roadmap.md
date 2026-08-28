@@ -1,6 +1,6 @@
 # Colony Life Simulation roadmap, core, and relationships
 
-- **Status:** End-to-end execution underway; Phases 1 through 3 are implemented in the headless path, and Phases 4 through 7 remain sequenced work.
+- **Status:** End-to-end execution underway; Phases 1 through 4 are implemented in the headless path, and Phases 5 through 7 remain sequenced work.
 - **Owner:** Maintainer / primary agent
 - **Base commit:** `028a209` on `codex/agent-development-foundation` (PR #6, base `master`)
 - **Last updated:** 2026-08-28
@@ -28,7 +28,7 @@ The roadmap is divided into seven capability phases. Phase 2 explicitly includes
 
 ### Roadmap, not current behavior
 
-The deterministic headless engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, and Phase 3 bounded cognition/memory rules. Economy, technology, diplomacy, conflict, and city-scale behavior are not claimed to exist until their phase gates pass.
+The deterministic headless engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, Phase 3 bounded cognition/memory rules, and Phase 4 production/economy rules. Technology, diplomacy, conflict, and city-scale behavior are not claimed to exist until their phase gates pass.
 
 ## 2. Product goal and user value
 
@@ -110,7 +110,7 @@ Turn the prototype into a deterministic, observable artificial-life simulation w
 
 ## 4. Current increment: deterministic simulation core
 
-The first three vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a headless lifecycle/relationship engine, and bounded cognition/memory. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, and learned policy. It does not replace the Pygame loop; money, technology, diplomacy, conflict, and scale remain later tasks with separate gates.
+The first four vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a headless lifecycle/relationship engine, bounded cognition/memory, and a production/economy engine. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, learned policy, material/labor production, incentive-based jobs, wallets/treasuries, demand pricing, and atomic trade. It does not replace the Pygame loop; technology, diplomacy, conflict, and scale remain later tasks with separate gates.
 
 ### In scope
 
@@ -125,7 +125,7 @@ The first three vertical slices implement a pure-Python deterministic clock, see
 ### Out of scope for this increment
 
 - Cognition beyond the current bounded observations, memory TTL, learning, and explicit sharing hooks.
-- Jobs, buildings, production chains, money, markets, demand, supply, or prices.
+- Buildings beyond the current recipe/storage economy, plus technology, diplomacy, conflict, and scale integration.
 - Automatic integration of legacy neural-network decisions with the new core.
 - Migration of legacy chromosome pickle files; no new compatibility commitment is made for those files.
 
@@ -137,7 +137,7 @@ The first three vertical slices implement a pure-Python deterministic clock, see
 - **Event:** an ordered serializable state-transition record, owned by the core event log.
 - **Snapshot:** a canonical JSON-compatible observation of state and schema version; it must not execute data when loaded.
 - **Love/affinity:** relationship state derived from explicit interactions and consent, owned by the relationship system rather than copied into genomes or settlement knowledge.
-- **Wallet/market/demand/supply/price:** future Phase 4 economic state owned by an explicitly chosen settlement or actor-account model.
+- **Wallet/market/demand/supply/price:** Phase 4 economic state owned by actor wallets and settlement treasuries, with explicit recipes, reservations, quotes, and atomic exchange.
 - **Individual state, memory, inherited genome, learned behavior, settlement knowledge:** separate categories that future phases must not alias or silently merge.
 
 ## 6. Numbered requirements for the current increment
@@ -208,4 +208,4 @@ The implementation exposes seed, world dimensions, population, current tick, sta
 
 ## 11. Deferred roadmap work
 
-The next task after this increment is the Phase 4 economy slice: material- and labor-based production costs, supply/demand pricing, wallets/treasury, and atomic exchange. Cognition is implemented in the headless path; economy, technology, diplomacy, conflict, and scale remain deferred.
+The next task after this increment is the Phase 5 technology slice. Cognition and economy are implemented in the headless path; technology, diplomacy, conflict, and scale remain deferred.

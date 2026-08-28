@@ -173,6 +173,83 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertGreater(agent.learned_policy["foraging"], 0)
         self.assertEqual(agent.genome, genome_before)
 
+    def test_production_reserves_materials_and_waits_for_labor_ticks(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        settlement = simulation.settlements[agent.settlement_id]
+        grain_before = settlement.storage["grain"]
+        food_before = settlement.storage["food"]
+
+        job_id = simulation.start_production(agent.agent_id, "bread")
+
+        self.assertIsNotNone(job_id)
+        self.assertEqual(settlement.storage["grain"], grain_before - 1)
+        self.assertEqual(settlement.storage["food"], food_before)
+        simulation.step()
+        self.assertIn(job_id, simulation.production_jobs)
+        self.assertEqual(settlement.storage["food"], food_before)
+        simulation.step()
+        self.assertNotIn(job_id, simulation.production_jobs)
+        self.assertEqual(settlement.storage["food"], food_before + 2)
+
+    def test_production_cost_has_material_and_labor_foundation(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+
+        costs = simulation.production_cost("bread", "settlement-000")
+
+        self.assertEqual(costs["material_cost"], 4)
+        self.assertEqual(costs["labor_cost"], 4)
+        self.assertEqual(costs["cost_floor"], 8)
+        self.assertGreaterEqual(simulation.market_quote("settlement-000", "food"), 4)
+
+    def test_demand_pressure_raises_price_and_supply_reduces_pressure(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        settlement = simulation.settlements["settlement-000"]
+        settlement.storage["food"] = 5
+        baseline = simulation.market_quote(settlement.settlement_id, "food")
+
+        simulation.record_demand(settlement.settlement_id, "food", 5)
+        pressured = simulation.market_quote(settlement.settlement_id, "food")
+        settlement.storage["food"] += 10
+        replenished = simulation.market_quote(settlement.settlement_id, "food")
+
+        self.assertGreater(pressured, baseline)
+        self.assertLessEqual(replenished, pressured)
+
+    def test_trade_conserves_money_and_invalid_trade_has_no_partial_side_effects(self):
+        simulation = self.fixture(population=2, settlement_count=1)
+        buyer = simulation.agents["agent-0000"]
+        seller = simulation.settlements["settlement-000"]
+        seller.storage["food"] = 5
+        simulation.record_demand(seller.settlement_id, "food", 2)
+        money_before = simulation.invariants()["total_money"]
+        stock_before = seller.storage["food"]
+        self.assertTrue(simulation.buy_good(buyer.agent_id, seller.settlement_id, "food", 1))
+        self.assertEqual(simulation.invariants()["total_money"], money_before)
+        self.assertEqual(seller.storage["food"], stock_before - 1)
+        self.assertEqual(buyer.inventory["food"], 1)
+
+        wallet_after = buyer.wallet
+        seller_after = seller.storage["food"]
+        buyer.wallet = 0
+        self.assertFalse(simulation.buy_good(buyer.agent_id, seller.settlement_id, "food", 1))
+        self.assertEqual(buyer.wallet, 0)
+        self.assertEqual(seller.storage["food"], seller_after)
+        self.assertEqual(buyer.inventory["food"], 1)
+
+    def test_incentive_job_allocation_uses_current_shortage_and_skill(self):
+        simulation = self.fixture(population=2, settlement_count=1)
+        settlement = simulation.settlements["settlement-000"]
+        settlement.storage["food"] = 0
+        settlement.storage["tool"] = 0
+        simulation.record_demand(settlement.settlement_id, "food", 4)
+
+        jobs = simulation.allocate_jobs(settlement.settlement_id)
+
+        self.assertTrue(jobs)
+        self.assertTrue(all(job_id in simulation.production_jobs for job_id in jobs))
+        self.assertEqual(len(jobs), 2)
+
     def test_full_snapshot_round_trip_and_resume(self):
         config = ColonyConfig(seed=91, population=4, settlement_count=2, adult_age=2, fertility_start=2)
         checkpoint = ColonySimulation(config).run(3)

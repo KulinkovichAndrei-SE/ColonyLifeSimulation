@@ -29,8 +29,9 @@ Version 1.0 implements the first prototype loop:
 - A separate display-free deterministic core probe in `simulation_core.py` with explicit ticks, seeded randomness, structured events, and versioned JSON snapshots; `headless_demo.py` demonstrates deterministic checkpoint/resume.
 - A separate display-free multi-phase engine in `colony_simulation.py` with tick-driven needs, aging, death, directed affinity, consent, pair bonding, pregnancy, birth, childcare hooks, and isolated genome inheritance.
 - Phase 3 cognition in the same headless engine: bounded perception, private episodic memory with deterministic TTL, semantic facts, explicit settlement knowledge sharing, and learned policy state isolated from genomes.
+- Phase 4 economy in the same headless engine: recipes, material reservation, labor ticks, incentive-based job allocation, wallets, settlement treasuries, demand pressure, material/time cost floors, and atomic purchases.
 
-The deterministic core and Phases 2–3 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Money/economy, technology, diplomacy, conflict, and scale remain later roadmap phases.
+The deterministic core and Phases 2–4 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Technology, diplomacy, conflict, and scale remain later roadmap phases.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -101,7 +102,7 @@ The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay
 - Advanced resources and buildings are defined but disabled or unused.
 - Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are implemented in the headless Phase 2 engine but are not wired into the legacy Pygame loop.
 - Bounded perception, episodic/semantic memory, learning, and explicit settlement knowledge sharing are implemented in the headless Phase 3 engine but are not wired into the legacy Pygame loop.
-- Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and trade are specified for Phase 4 but are not current features.
+- Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and atomic trade are implemented in the headless Phase 4 engine but are not wired into the legacy Pygame loop.
 - Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
 
 The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md).
@@ -121,8 +122,8 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning. The first headless cognition slice is implemented; legacy integration remains deferred.
    - Keep individual memory separate from knowledge shared by a settlement.
 4. **Grow settlements and economies**
-   - Add jobs, task allocation, buildings, storage, production chains, logistics, territory, population growth, wallets/treasury, money, and trade.
-   - Price created goods from explicit material and labor-time cost foundations, then adjust quotes from observable supply and demand.
+   - The first headless economy slice is implemented: jobs, storage, production chains, wallets/treasury, money, and atomic trade.
+   - Price created goods from explicit material and labor-time cost foundations, then adjust quotes from observable supply and demand. Legacy integration remains deferred.
    - Make settlement-level decisions depend on shared observations and measurable needs.
 5. **Research technologies**
    - Add discoverable knowledge, prerequisites, experimentation, diffusion, and technologies that alter possible actions.

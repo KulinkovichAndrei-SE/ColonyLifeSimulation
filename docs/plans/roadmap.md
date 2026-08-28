@@ -3,7 +3,7 @@
 - **Specification:** [docs/specs/roadmap.md](../specs/roadmap.md)
 - **Base commit:** `028a209` (Phase 1 foundation)
 - **Working branch:** `codex/agent-development-foundation` (PR #6 head)
-- **Plan status:** Phases 1–3 completed; end-to-end Phase 4–7 execution is in progress
+- **Plan status:** Phases 1–4 completed; end-to-end Phase 5–7 execution is in progress
 - **Last updated:** 2026-08-28
 
 ## 1. Current execution paths and affected state

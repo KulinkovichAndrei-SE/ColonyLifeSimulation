@@ -972,6 +972,44 @@ class ColonySimulation:
         self._emit("production_started", job_id=job_id, agent_id=agent_id, recipe=recipe_name, material_cost=job.material_cost, labor_cost=job.labor_cost, labor_ticks=recipe.labor_ticks)
         return job_id
 
+    def allocate_jobs(self, settlement_id: Optional[str] = None) -> Tuple[str, ...]:
+        """Assign free adults to the most constrained available recipe.
+
+        The policy is intentionally incentive-based: current stock, recorded
+        demand, and learned skill determine the score.  No agent is given a
+        permanent scripted profession.
+        """
+
+        settlement_ids = [settlement_id] if settlement_id is not None else sorted(self.settlements)
+        started: List[str] = []
+        for current_id in settlement_ids:
+            settlement = self._settlement(current_id)
+            free_agents = sorted(
+                (agent for agent in self.alive_agents if agent.settlement_id == current_id and self._is_adult(agent) and agent.job_id is None),
+                key=lambda item: item.agent_id,
+            )
+            for agent in free_agents:
+                candidates: List[Tuple[float, str]] = []
+                for recipe_name, recipe in RECIPES.items():
+                    if any(settlement.storage.get(good, 0) < quantity for good, quantity in recipe.inputs.items()):
+                        continue
+                    output_need = 0.0
+                    effective = self._effective_recipe(settlement, recipe_name)
+                    for good, quantity in effective.output.items():
+                        stock = settlement.storage.get(good, 0)
+                        demand = settlement.demand.get(good, 0)
+                        output_need += max(0.0, 4.0 - stock) + demand / max(1, quantity)
+                    skill_bonus = agent.skills.get(recipe_name, 0) * 0.25
+                    candidates.append((output_need + skill_bonus, recipe_name))
+                if not candidates:
+                    continue
+                _, selected_recipe = max(candidates, key=lambda item: (item[0], item[1]))
+                job_id = self.start_production(agent.agent_id, selected_recipe)
+                if job_id is not None:
+                    started.append(job_id)
+        self._emit("jobs_allocated", settlement_id=settlement_id, job_ids=tuple(started))
+        return tuple(started)
+
     def record_demand(self, settlement_id: str, good: str, quantity: int = 1) -> int:
         settlement = self._settlement(settlement_id)
         amount = _positive(quantity, "demand quantity")
