@@ -2,3 +2,10 @@ bin
 lib
 .idea
 pyvenv.cfg
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+save/

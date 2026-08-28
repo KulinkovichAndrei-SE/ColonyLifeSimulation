@@ -1,0 +1,4 @@
+interface:
+  display_name: "Colony Development Pipeline"
+  short_description: "Run the simulation delivery pipeline"
+  default_prompt: "Use $colony-development-pipeline to turn this feature request into a verified implementation."
