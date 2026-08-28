@@ -26,6 +26,9 @@ Version 1.0 implements the first prototype loop:
 - Loading and saving chromosome populations between runs through pickle files.
 - Parallel colony and person updates using Python thread pools.
 - A visual status panel showing each colony's color and shared resources.
+- A separate display-free deterministic core probe in `simulation_core.py` with explicit ticks, seeded randomness, structured events, and versioned JSON snapshots; `headless_demo.py` demonstrates deterministic checkpoint/resume.
+
+The deterministic core is an implemented infrastructure slice, not yet a replacement for the legacy Pygame simulation. It intentionally does not claim to implement human lifecycle, love, reproduction, children, or the economy.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -74,19 +77,30 @@ mkdir save
 python main.py
 ```
 
+To exercise the new display-free core without opening a window:
+
+```bash
+python headless_demo.py
+python -m unittest discover -s tests -v
+```
+
 The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay controls; close the window to save chromosomes and stop the program. The `save/` directory must exist before the first save.
 
 ## Current limitations
 
-- The simulation is tightly coupled to Pygame and wall-clock time; there is no deterministic headless engine.
-- Random seeds, simulation speed, world size, and population size are not externally configurable.
+- The legacy simulation is tightly coupled to Pygame and wall-clock time; the new deterministic core probe is not yet wired into that loop.
+- Legacy random seeds, simulation speed, world size, and population size are not externally configurable; the core probe has explicit configuration.
 - Shared mutable state is updated from nested thread pools without an explicit synchronization model.
-- There is no automated test suite, dependency lock file, packaging metadata, CI, or benchmark harness.
+- The deterministic core has a dependency-light test suite, but the legacy simulation still lacks complete integration coverage, dependency locking, packaging metadata, CI, and a benchmark harness.
 - Population evolution changes chromosomes of existing people; biological reproduction and inheritance are not modeled yet.
 - Skills are counters only and do not yet change productivity or unlock behavior.
-- Persistence uses unversioned pickle files and assumes the `save/` directory already exists.
+- Legacy persistence uses unversioned pickle files and assumes the `save/` directory already exists; the new core uses versioned JSON snapshots but does not migrate chromosome saves.
 - Advanced resources and buildings are defined but disabled or unused.
-- Technologies, settlement memory, governance, professions, production chains, trade, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
+- Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are specified for Phase 2 but are not current features.
+- Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and trade are specified for Phase 4 but are not current features.
+- Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
+
+The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md).
 
 ## Development roadmap
 
@@ -97,13 +111,14 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - Add a deterministic clock, seeded randomness, configuration, logging, and a headless runner.
    - Introduce tests, benchmarks, versioned saves, and dependency management.
 2. **Complete individual life cycles**
-   - Add needs, injury, aging, death, reproduction, inheritance, and meaningful skill progression.
+   - Add needs, injury, aging, death, pair bonding, love/affinity, courtship, consent, reproduction, pregnancy, children, inheritance, childcare, and meaningful skill progression.
    - Replace global action throttles with per-agent scheduling and explicit ownership of mutable state.
 3. **Build cognition and memory**
    - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning.
    - Keep individual memory separate from knowledge shared by a settlement.
 4. **Grow settlements and economies**
-   - Add jobs, task allocation, buildings, storage, production chains, logistics, territory, and population growth.
+   - Add jobs, task allocation, buildings, storage, production chains, logistics, territory, population growth, wallets/treasury, money, and trade.
+   - Price created goods from explicit material and labor-time cost foundations, then adjust quotes from observable supply and demand.
    - Make settlement-level decisions depend on shared observations and measurable needs.
 5. **Research technologies**
    - Add discoverable knowledge, prerequisites, experimentation, diffusion, and technologies that alter possible actions.
