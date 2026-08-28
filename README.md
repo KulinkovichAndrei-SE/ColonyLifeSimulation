@@ -28,8 +28,9 @@ Version 1.0 implements the first prototype loop:
 - A visual status panel showing each colony's color and shared resources.
 - A separate display-free deterministic core probe in `simulation_core.py` with explicit ticks, seeded randomness, structured events, and versioned JSON snapshots; `headless_demo.py` demonstrates deterministic checkpoint/resume.
 - A separate display-free multi-phase engine in `colony_simulation.py` with tick-driven needs, aging, death, directed affinity, consent, pair bonding, pregnancy, birth, childcare hooks, and isolated genome inheritance.
+- Phase 3 cognition in the same headless engine: bounded perception, private episodic memory with deterministic TTL, semantic facts, explicit settlement knowledge sharing, and learned policy state isolated from genomes.
 
-The deterministic core and Phase 2 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Cognition, money/economy, technology, diplomacy, conflict, and scale remain later roadmap phases.
+The deterministic core and Phases 2–3 engine are implemented infrastructure/domain slices, not yet a replacement for the legacy Pygame simulation. Money/economy, technology, diplomacy, conflict, and scale remain later roadmap phases.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -99,6 +100,7 @@ The renderer currently opens a fixed `1920 x 1080` window. There are no gameplay
 - Legacy persistence uses unversioned pickle files and assumes the `save/` directory already exists; the new core uses versioned JSON snapshots but does not migrate chromosome saves.
 - Advanced resources and buildings are defined but disabled or unused.
 - Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, and childcare are implemented in the headless Phase 2 engine but are not wired into the legacy Pygame loop.
+- Bounded perception, episodic/semantic memory, learning, and explicit settlement knowledge sharing are implemented in the headless Phase 3 engine but are not wired into the legacy Pygame loop.
 - Money, material/time-based production costs, supply/demand pricing, wallets/treasury, and trade are specified for Phase 4 but are not current features.
 - Technologies, settlement memory, governance, professions, production chains, diplomacy, warfare, and city-scale growth are roadmap items, not current features.
 
@@ -116,7 +118,7 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - Add needs, injury, aging, death, pair bonding, love/affinity, courtship, consent, reproduction, pregnancy, children, inheritance, childcare, and meaningful skill progression.
    - Replace global action throttles with per-agent scheduling and explicit ownership of mutable state.
 3. **Build cognition and memory**
-   - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning.
+   - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning. The first headless cognition slice is implemented; legacy integration remains deferred.
    - Keep individual memory separate from knowledge shared by a settlement.
 4. **Grow settlements and economies**
    - Add jobs, task allocation, buildings, storage, production chains, logistics, territory, population growth, wallets/treasury, money, and trade.

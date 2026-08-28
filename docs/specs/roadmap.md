@@ -1,6 +1,6 @@
 # Colony Life Simulation roadmap, core, and relationships
 
-- **Status:** End-to-end execution underway; Phases 1 and 2 are implemented in the headless path, and Phases 3 through 7 remain sequenced work.
+- **Status:** End-to-end execution underway; Phases 1 through 3 are implemented in the headless path, and Phases 4 through 7 remain sequenced work.
 - **Owner:** Maintainer / primary agent
 - **Base commit:** `028a209` on `codex/agent-development-foundation` (PR #6, base `master`)
 - **Last updated:** 2026-08-28
@@ -28,7 +28,7 @@ The roadmap is divided into seven capability phases. Phase 2 explicitly includes
 
 ### Roadmap, not current behavior
 
-The deterministic headless engine now includes the Phase 1 seam and Phase 2 lifecycle/relationship rules. Cognition, economy, technology, diplomacy, conflict, and city-scale behavior are not claimed to exist until their phase gates pass.
+The deterministic headless engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, and Phase 3 bounded cognition/memory rules. Economy, technology, diplomacy, conflict, and city-scale behavior are not claimed to exist until their phase gates pass.
 
 ## 2. Product goal and user value
 
@@ -110,7 +110,7 @@ Turn the prototype into a deterministic, observable artificial-life simulation w
 
 ## 4. Current increment: deterministic simulation core
 
-The first two vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, and a headless lifecycle/relationship engine. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, and isolated inherited genomes. It does not replace the Pygame loop; cognition, money, technology, diplomacy, conflict, and scale remain later tasks with separate gates.
+The first three vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a headless lifecycle/relationship engine, and bounded cognition/memory. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, and learned policy. It does not replace the Pygame loop; money, technology, diplomacy, conflict, and scale remain later tasks with separate gates.
 
 ### In scope
 
@@ -124,7 +124,7 @@ The first two vertical slices implement a pure-Python deterministic clock, seed-
 
 ### Out of scope for this increment
 
-- Cognition beyond the current bounded observations and explicit sharing hooks.
+- Cognition beyond the current bounded observations, memory TTL, learning, and explicit sharing hooks.
 - Jobs, buildings, production chains, money, markets, demand, supply, or prices.
 - Automatic integration of legacy neural-network decisions with the new core.
 - Migration of legacy chromosome pickle files; no new compatibility commitment is made for those files.
@@ -208,4 +208,4 @@ The implementation exposes seed, world dimensions, population, current tick, sta
 
 ## 11. Deferred roadmap work
 
-The next task after this increment is the Phase 3 cognition slice: bounded perception, separate episodic/semantic memory, deterministic retention, learned policy, and explicit settlement knowledge sharing. Phase 4 will then add the money system: material- and labor-based production costs, supply/demand pricing, wallets/treasury, and atomic exchange. Neither Phase 3 nor Phase 4 is implemented yet.
+The next task after this increment is the Phase 4 economy slice: material- and labor-based production costs, supply/demand pricing, wallets/treasury, and atomic exchange. Cognition is implemented in the headless path; economy, technology, diplomacy, conflict, and scale remain deferred.

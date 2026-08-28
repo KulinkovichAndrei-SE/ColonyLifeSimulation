@@ -130,6 +130,49 @@ class ColonySimulationTests(unittest.TestCase):
         self.assertEqual(agent.wallet, 0)
         self.assertEqual(simulation.settlements[agent.settlement_id].treasury, 109)
 
+    def test_perception_memory_is_private_bounded_and_expires(self):
+        simulation = self.fixture(population=1, settlement_count=1, perception_radius=0, memory_capacity=3, memory_ttl=2)
+        agent = simulation.agents["agent-0000"]
+        resource_position = next(iter(simulation.resources))
+        agent.x, agent.y = map(int, resource_position.split(","))
+
+        simulation.step()
+        self.assertTrue(simulation.can_act_on_resource(agent.agent_id, resource_position))
+        self.assertLessEqual(len(agent.memory), 3)
+        self.assertNotIn("resource:" + resource_position, simulation.settlements[agent.settlement_id].knowledge)
+
+        agent.x = (agent.x + 5) % simulation.config.width
+        agent.y = (agent.y + 5) % simulation.config.height
+        simulation.run(2)
+
+        self.assertFalse(simulation.can_act_on_resource(agent.agent_id, resource_position))
+        self.assertNotIn("resource:" + resource_position, agent.semantic_memory)
+
+    def test_knowledge_sharing_copies_a_fact_without_aliasing_memory(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        settlement = simulation.settlements[agent.settlement_id]
+
+        agent.semantic_memory["private:plan"] = "hidden"
+        self.assertNotIn("private:plan", settlement.knowledge)
+        simulation.share_knowledge(agent.agent_id, "resource:known", "wood")
+
+        self.assertEqual(settlement.knowledge["resource:known"], "wood")
+        self.assertIsNot(settlement.knowledge, agent.semantic_memory)
+        agent.semantic_memory["resource:known"] = "changed-locally"
+        self.assertEqual(settlement.knowledge["resource:known"], "wood")
+
+    def test_learning_changes_policy_and_skill_without_changing_genome(self):
+        simulation = self.fixture(population=1, settlement_count=1)
+        agent = simulation.agents["agent-0000"]
+        genome_before = agent.genome
+
+        simulation.learn(agent.agent_id, "foraging", 2)
+
+        self.assertEqual(agent.skills["foraging"], 2)
+        self.assertGreater(agent.learned_policy["foraging"], 0)
+        self.assertEqual(agent.genome, genome_before)
+
     def test_full_snapshot_round_trip_and_resume(self):
         config = ColonyConfig(seed=91, population=4, settlement_count=2, adult_age=2, fertility_start=2)
         checkpoint = ColonySimulation(config).run(3)

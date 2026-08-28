@@ -25,7 +25,7 @@ from simulation_core import (
 )
 
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 3
 MAX_MEMORY_ITEMS = 24
 MAX_RELATION_MEMORY = 32
 MATERIAL_PRICES = {"wood": 3, "grain": 4, "stone": 5, "ore": 7}
@@ -93,6 +93,8 @@ class ColonyConfig:
     energy_decay: int = 1
     mutation_percent: int = 8
     combat_damage: int = 18
+    memory_capacity: int = 24
+    memory_ttl: int = 20
 
     def __post_init__(self) -> None:
         _require_int(self.seed, "seed")
@@ -122,6 +124,8 @@ class ColonyConfig:
         if not 0 <= self.mutation_percent <= 100:
             raise ValueError("mutation_percent must be in [0, 100]")
         _positive(self.combat_damage, "combat_damage")
+        _positive(self.memory_capacity, "memory_capacity")
+        _positive(self.memory_ttl, "memory_ttl")
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -143,6 +147,8 @@ class ColonyConfig:
             "energy_decay": self.energy_decay,
             "mutation_percent": self.mutation_percent,
             "combat_damage": self.combat_damage,
+            "memory_capacity": self.memory_capacity,
+            "memory_ttl": self.memory_ttl,
         }
 
     @classmethod
@@ -206,6 +212,7 @@ class AgentState:
     memory: List[Dict[str, Any]] = field(default_factory=list)
     semantic_memory: Dict[str, str] = field(default_factory=dict)
     learned_policy: Dict[str, float] = field(default_factory=dict)
+    semantic_memory_ticks: Dict[str, int] = field(default_factory=dict)
     skills: Dict[str, int] = field(default_factory=dict)
     wallet: int = 20
     inventory: Dict[str, int] = field(default_factory=dict)
@@ -229,10 +236,10 @@ class AgentState:
     def position(self) -> Tuple[int, int]:
         return self.x, self.y
 
-    def remember(self, item: Mapping[str, Any]) -> None:
+    def remember(self, item: Mapping[str, Any], capacity: int = MAX_MEMORY_ITEMS) -> None:
         self.memory.append(dict(item))
-        if len(self.memory) > MAX_MEMORY_ITEMS:
-            del self.memory[:-MAX_MEMORY_ITEMS]
+        if len(self.memory) > capacity:
+            del self.memory[:-capacity]
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -249,6 +256,7 @@ class AgentState:
             "genome": list(self.genome),
             "memory": self.memory,
             "semantic_memory": self.semantic_memory,
+            "semantic_memory_ticks": self.semantic_memory_ticks,
             "learned_policy": self.learned_policy,
             "skills": self.skills,
             "wallet": self.wallet,
@@ -282,6 +290,7 @@ class AgentState:
                 genome=tuple(value["genome"]),
                 memory=[dict(item) for item in value["memory"]],
                 semantic_memory=dict(value["semantic_memory"]),
+                semantic_memory_ticks=dict(value.get("semantic_memory_ticks", {})),
                 learned_policy=dict(value["learned_policy"]),
                 skills=dict(value["skills"]),
                 wallet=value["wallet"],
@@ -570,6 +579,7 @@ class ColonySimulation:
         self._emit("tick_advanced")
         self._update_needs_and_lifecycle()
         self._update_childcare()
+        self._decay_memory()
         self._update_perception()
         self._update_relationships()
         self._update_production()
@@ -624,15 +634,29 @@ class ColonySimulation:
             for other in sorted(self.alive_agents, key=lambda item: item.agent_id):
                 if agent.agent_id == other.agent_id or self._distance(agent, other) > radius:
                     continue
-                agent.remember({"tick": self.tick, "kind": "agent_observed", "subject": other.agent_id})
+                agent.remember({"tick": self.tick, "kind": "agent_observed", "subject": other.agent_id}, self.config.memory_capacity)
                 agent.semantic_memory[f"agent:{other.agent_id}"] = other.settlement_id
+                agent.semantic_memory_ticks[f"agent:{other.agent_id}"] = self.tick
                 self._emit("observation_recorded", agent_id=agent.agent_id, subject_id=other.agent_id)
             for position, resource in sorted(self.resources.items()):
                 x, y = _split_position(position)
                 if abs(agent.x - x) + abs(agent.y - y) <= radius:
-                    agent.remember({"tick": self.tick, "kind": "resource_observed", "subject": position, "resource": resource})
+                    agent.remember({"tick": self.tick, "kind": "resource_observed", "subject": position, "resource": resource}, self.config.memory_capacity)
                     agent.semantic_memory[f"resource:{position}"] = resource
+                    agent.semantic_memory_ticks[f"resource:{position}"] = self.tick
                     self._emit("observation_recorded", agent_id=agent.agent_id, subject_id=position)
+
+    def _decay_memory(self) -> None:
+        for agent in self.alive_agents:
+            agent.memory = [
+                item
+                for item in agent.memory
+                if _is_int(item.get("tick")) and self.tick - item["tick"] < self.config.memory_ttl
+            ]
+            for fact, recorded_tick in list(agent.semantic_memory_ticks.items()):
+                if not _is_int(recorded_tick) or self.tick - recorded_tick >= self.config.memory_ttl:
+                    agent.semantic_memory_ticks.pop(fact, None)
+                    agent.semantic_memory.pop(fact, None)
 
     def _update_relationships(self) -> None:
         adults = [agent for agent in self.alive_agents if self._is_adult(agent)]
@@ -882,9 +906,20 @@ class ColonySimulation:
         agent = self._agent(agent_id)
         settlement = self.settlements[agent.settlement_id]
         agent.semantic_memory[fact] = value
+        agent.semantic_memory_ticks[fact] = self.tick
         settlement.knowledge[fact] = value
         self._emit("knowledge_shared", agent_id=agent_id, settlement_id=agent.settlement_id, fact=fact, value=value)
         return True
+
+    def can_act_on_resource(self, agent_id: str, position: str) -> bool:
+        """Return whether perception or retained semantic memory identifies a resource."""
+
+        agent = self._agent(agent_id)
+        x, y = _split_position(position)
+        in_range = abs(agent.x - x) + abs(agent.y - y) <= self.config.perception_radius
+        if in_range and position in self.resources:
+            return True
+        return agent.semantic_memory.get(f"resource:{position}") == self.resources.get(position)
 
     def learn(self, agent_id: str, skill: str, amount: int = 1) -> int:
         agent = self._agent(agent_id)
