@@ -29,6 +29,9 @@ class PygameAppTests(unittest.TestCase):
 
         app = PygameSimulationApp(frames_per_second=12)
         try:
+            self.assertTrue(app.simulation.config.ai_enabled)
+            app.simulation.step()
+            self.assertTrue(any(event.event_type == "learning_updated" for event in app.simulation.events))
             before_tick = app.simulation.tick
             before_speed = app.frames_per_second
             before_paused = app.paused

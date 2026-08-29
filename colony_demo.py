@@ -35,8 +35,11 @@ def main() -> None:
     simulation.record_demand("settlement-000", "food", 4)
     simulation.allocate_jobs()
     simulation.run(2)
-    simulation.start_research(mother.agent_id, "agriculture")
-    simulation.run(2)
+    if "agriculture" not in simulation.settlements[mother.settlement_id].technologies:
+        research_job = simulation.research_jobs_for(mother.settlement_id)
+        if research_job is None and mother.job_id is None:
+            simulation.start_research(mother.agent_id, "agriculture")
+            simulation.run(2)
 
     simulation.negotiate("settlement-000", "settlement-001", "trade")
     buyer = simulation.agents["agent-0001"]

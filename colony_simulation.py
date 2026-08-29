@@ -15,7 +15,8 @@ import math
 import statistics
 import time
 import tracemalloc
-from dataclasses import dataclass, field, replace
+from math import ceil
+from dataclasses import MISSING, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -25,12 +26,24 @@ from simulation_core import (
     SnapshotValidationError,
     canonical_json,
 )
+from neuralnetwork import NNetwork
 
 
-SNAPSHOT_SCHEMA_VERSION = 4
+SNAPSHOT_SCHEMA_VERSION = 5
+SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = {4, SNAPSHOT_SCHEMA_VERSION}
 MAX_MEMORY_ITEMS = 24
 MAX_RELATION_MEMORY = 32
 MATERIAL_PRICES = {"wood": 3, "grain": 4, "stone": 5, "ore": 7}
+AGENT_ACTIONS = ("move", "produce", "socialize", "care", "trade", "learn")
+NEURAL_INPUT_COUNT = 10
+NEURAL_HIDDEN_COUNT = 12
+NEURAL_WEIGHT_COUNT = NNetwork.getTotalWeights(NEURAL_INPUT_COUNT, NEURAL_HIDDEN_COUNT, len(AGENT_ACTIONS))
+SETTLEMENT_ACTIONS = ("produce", "research", "observe", "migrate", "trade", "diplomacy")
+SETTLEMENT_INPUT_COUNT = 8
+SETTLEMENT_HIDDEN_COUNT = 12
+SETTLEMENT_WEIGHT_COUNT = NNetwork.getTotalWeights(
+    SETTLEMENT_INPUT_COUNT, SETTLEMENT_HIDDEN_COUNT, len(SETTLEMENT_ACTIONS)
+)
 
 
 def _is_int(value: Any) -> bool:
@@ -225,6 +238,9 @@ class AgentState:
     memory: List[Dict[str, Any]] = field(default_factory=list)
     semantic_memory: Dict[str, str] = field(default_factory=dict)
     learned_policy: Dict[str, float] = field(default_factory=dict)
+    # Neural policy state is intentionally separate from the biological
+    # genome, episodic memory, and scalar telemetry kept for compatibility.
+    brain_weights: Tuple[float, ...] = field(default_factory=tuple)
     semantic_memory_ticks: Dict[str, int] = field(default_factory=dict)
     skills: Dict[str, int] = field(default_factory=dict)
     wallet: int = 20
@@ -271,6 +287,7 @@ class AgentState:
             "semantic_memory": self.semantic_memory,
             "semantic_memory_ticks": self.semantic_memory_ticks,
             "learned_policy": self.learned_policy,
+            "brain_weights": list(self.brain_weights),
             "skills": self.skills,
             "wallet": self.wallet,
             "inventory": self.inventory,
@@ -305,6 +322,7 @@ class AgentState:
                 semantic_memory=dict(value["semantic_memory"]),
                 semantic_memory_ticks=dict(value.get("semantic_memory_ticks", {})),
                 learned_policy=dict(value["learned_policy"]),
+                brain_weights=tuple(float(item) for item in value.get("brain_weights", ())),
                 skills=dict(value["skills"]),
                 wallet=value["wallet"],
                 inventory=dict(value["inventory"]),
@@ -328,6 +346,8 @@ class AgentState:
                 raise SnapshotValidationError(f"agent {name} must be an integer")
         if not agent.alive and agent.health < 0:
             raise SnapshotValidationError("dead agent health cannot be negative")
+        if any(not math.isfinite(weight) for weight in agent.brain_weights):
+            raise SnapshotValidationError("agent neural weights must be finite")
         return agent
 
 
@@ -342,6 +362,7 @@ class SettlementState:
     territory: List[str] = field(default_factory=list)
     relations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     learned_policy: Dict[str, float] = field(default_factory=dict)
+    brain_weights: Tuple[float, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -360,6 +381,7 @@ class SettlementState:
                 for relation_id, relation in sorted(self.relations.items())
             },
             "learned_policy": self.learned_policy,
+            "brain_weights": list(self.brain_weights),
         }
 
     @classmethod
@@ -381,11 +403,14 @@ class SettlementState:
                     for key, item in value["relations"].items()
                 },
                 learned_policy={key: float(item) for key, item in value.get("learned_policy", {}).items()},
+                brain_weights=tuple(float(item) for item in value.get("brain_weights", ())),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise SnapshotValidationError(f"invalid settlement: {exc}") from exc
         if not isinstance(state.settlement_id, str) or not _is_int(state.treasury) or state.treasury < 0:
             raise SnapshotValidationError("invalid settlement identity or treasury")
+        if any(not math.isfinite(weight) for weight in state.brain_weights):
+            raise SnapshotValidationError("settlement neural weights must be finite")
         return state
 
 
@@ -530,6 +555,12 @@ class ColonySimulation:
                 settlement_id=settlement_id,
                 treasury=100,
                 storage={"wood": 10, "grain": 10, "stone": 4, "food": 2},
+                brain_weights=self._deterministic_brain_weights(
+                    f"settlement:{settlement_id}",
+                    SETTLEMENT_INPUT_COUNT,
+                    SETTLEMENT_HIDDEN_COUNT,
+                    len(SETTLEMENT_ACTIONS),
+                ),
             )
             self.settlements[settlement_id] = settlement
         ids = sorted(self.settlements)
@@ -552,6 +583,51 @@ class ColonySimulation:
             y = (index * 3 + 5) % self.config.height
             self.resources[_position_key(x, y)] = "grain"
 
+    def _new_brain_weights(
+        self,
+        input_count: int = NEURAL_INPUT_COUNT,
+        hidden_count: int = NEURAL_HIDDEN_COUNT,
+        output_count: int = len(AGENT_ACTIONS),
+    ) -> Tuple[float, ...]:
+        """Create bounded weights from this simulation's owned RNG."""
+
+        weight_count = NNetwork.getTotalWeights(input_count, hidden_count, output_count)
+        return tuple(
+            round((self.random.randrange(2001) - 1000) / 1000.0, 6)
+            for _ in range(weight_count)
+        )
+
+    def _deterministic_brain_weights(
+        self,
+        identity: str,
+        input_count: int,
+        hidden_count: int,
+        output_count: int,
+    ) -> Tuple[float, ...]:
+        """Create v4 migration weights without consuming the live RNG stream."""
+
+        digest = hashlib.sha256(f"{self.config.seed}:{identity}:neural-v5".encode("utf-8")).digest()
+        migration_seed = int.from_bytes(digest[:8], "big", signed=False)
+        source = SeededRandom(migration_seed)
+        weight_count = NNetwork.getTotalWeights(input_count, hidden_count, output_count)
+        return tuple(
+            round((source.randrange(2001) - 1000) / 1000.0, 6)
+            for _ in range(weight_count)
+        )
+
+    def _migrated_brain_weights(self, agent_id: str) -> Tuple[float, ...]:
+        return self._deterministic_brain_weights(
+            f"agent:{agent_id}", NEURAL_INPUT_COUNT, NEURAL_HIDDEN_COUNT, len(AGENT_ACTIONS)
+        )
+
+    def _migrated_settlement_brain_weights(self, settlement_id: str) -> Tuple[float, ...]:
+        return self._deterministic_brain_weights(
+            f"settlement:{settlement_id}",
+            SETTLEMENT_INPUT_COUNT,
+            SETTLEMENT_HIDDEN_COUNT,
+            len(SETTLEMENT_ACTIONS),
+        )
+
     def _initialize_agents(self) -> None:
         settlement_ids = sorted(self.settlements)
         for index in range(self.config.population):
@@ -573,6 +649,7 @@ class ColonySimulation:
                 x=x,
                 y=y,
                 genome=genome,
+                brain_weights=self._new_brain_weights(),
                 _adult_age=self.config.adult_age,
             )
 
@@ -622,6 +699,194 @@ class ColonySimulation:
         for _ in range(count):
             self.step()
         return self
+
+    @staticmethod
+    def _count_events(events: Iterable[DomainEvent]) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for event in events:
+            counts[event.event_type] = counts.get(event.event_type, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def _terminal_reason(self) -> Optional[str]:
+        if self.winner() is not None:
+            return "winner"
+        if self.alive_population == 0:
+            return "all_agents_dead"
+        return None
+
+    def run_training(
+        self,
+        generations: int,
+        ticks_per_generation: int = 20,
+        terminal_mode: str = "diagnostic_stop",
+    ) -> Dict[str, Any]:
+        """Run sequential headless training windows and return a JSON report.
+
+        The public ``generations`` name is retained for the command-line
+        workflow, but each item is a fixed tick window in one continuous
+        simulation.  It is intentionally not a biological cohort boundary.
+
+        ``diagnostic_stop`` preserves the short-run terminal behavior. The
+        ``continue_after_game_over`` mode is intended for online training and
+        executes the requested workload even after a winner is observed.
+        """
+
+        window_count = _non_negative(generations, "generations")
+        window_ticks = _positive(ticks_per_generation, "ticks_per_generation")
+        if terminal_mode not in {"diagnostic_stop", "continue_after_game_over"}:
+            raise ValueError("terminal_mode must be diagnostic_stop or continue_after_game_over")
+        start_tick = self.tick
+        terminal_at_start = self.game_over
+        terminal_tick: Optional[int] = self.tick if terminal_at_start else None
+        first_terminal_reason: Optional[str] = self._terminal_reason() if terminal_at_start else None
+        terminal_winner: Optional[str] = self.winner() if terminal_at_start else None
+        windows: List[Dict[str, Any]] = []
+        completed_windows = 0
+
+        for window_number in range(1, window_count + 1):
+            window_start = self.tick
+            event_start = len(self.events)
+            for _ in range(window_ticks):
+                if terminal_mode == "diagnostic_stop" and self.game_over:
+                    break
+                self.step()
+                if terminal_tick is None and self.game_over:
+                    terminal_tick = self.tick
+                    first_terminal_reason = self._terminal_reason()
+                    terminal_winner = self.winner()
+
+            self._evolve_neural_population(window_number)
+
+            window_end = self.tick
+            interval_events = self.events[event_start:]
+            interval_event_counts = self._count_events(interval_events)
+            cumulative_event_counts = self._count_events(self.events)
+            terminal = self.game_over
+            actual_ticks = window_end - window_start
+            boundary_invariants = self.invariants()
+            windows.append(
+                {
+                    "training_window": window_number,
+                    "start_tick": window_start,
+                    "end_tick": window_end,
+                    "requested_ticks": window_ticks,
+                    "actual_ticks": actual_ticks,
+                    "alive_population": self.alive_population,
+                    "dead_population": boundary_invariants["dead_population"],
+                    "births": interval_event_counts.get("child_born", 0),
+                    "deaths": interval_event_counts.get("agent_died", 0),
+                    "interval_event_count": len(interval_events),
+                    "cumulative_event_count": len(self.events),
+                    "interval_event_counts": interval_event_counts,
+                    "cumulative_event_counts": cumulative_event_counts,
+                    "game_over": terminal,
+                    "terminal_reason": first_terminal_reason,
+                    "terminal_tick": terminal_tick,
+                    "terminal_winner": terminal_winner,
+                    "post_terminal_ticks": max(0, self.tick - terminal_tick) if terminal_tick is not None else 0,
+                    "winner": self.winner(),
+                    "invariants": boundary_invariants,
+                    "state_hash": self.state_hash(),
+                    "event_hash": self.event_hash(),
+                    "neural_state_hash": self.neural_state_hash(),
+                }
+            )
+            if actual_ticks == window_ticks:
+                completed_windows += 1
+            if terminal and terminal_mode == "diagnostic_stop":
+                break
+
+        final_invariants = self.invariants()
+        final_event_counts = self._count_events(self.events)
+        executed_windows = len(windows)
+        final_metrics = {
+            "tick": self.tick,
+            "executed_ticks": self.tick - start_tick,
+            "alive_population": self.alive_population,
+            "dead_population": final_invariants["dead_population"],
+            "births_total": final_event_counts.get("child_born", 0),
+            "deaths_total": final_event_counts.get("agent_died", 0),
+            "event_count": len(self.events),
+            "event_counts": final_event_counts,
+            "game_over": self.game_over,
+            "terminal_tick": terminal_tick,
+            "terminal_winner": terminal_winner,
+            "post_terminal_ticks": max(0, self.tick - terminal_tick) if terminal_tick is not None else 0,
+            "invariants": final_invariants,
+            "state_hash": self.state_hash(),
+            "event_hash": self.event_hash(),
+            "neural_state_hash": self.neural_state_hash(),
+        }
+        return {
+            "report_schema_version": 1,
+            "mode": "headless_training",
+            "effective_config": self.config.as_dict(),
+            "terminal_mode": terminal_mode,
+            "terminal_at_start": terminal_at_start,
+            "terminal_reached": terminal_tick is not None,
+            "terminal_tick": terminal_tick,
+            "terminal_winner": terminal_winner,
+            "post_terminal_ticks": max(0, self.tick - terminal_tick) if terminal_tick is not None else 0,
+            "requested_generations": window_count,
+            "ticks_per_generation": window_ticks,
+            "executed_generations": executed_windows,
+            "completed_generations": completed_windows,
+            "unexecuted_generations": window_count - executed_windows,
+            "executed_ticks": self.tick - start_tick,
+            "game_over": self.game_over,
+            "terminal_reason": first_terminal_reason,
+            "winner": self.winner(),
+            "windows": windows,
+            "final_metrics": final_metrics,
+            "state_hash": self.state_hash(),
+            "event_hash": self.event_hash(),
+            "neural_state_hash": self.neural_state_hash(),
+        }
+
+    def _agent_fitness(self, agent: AgentState) -> float:
+        """Return an observable fitness signal for policy selection."""
+
+        return (
+            agent.health / 100.0
+            + agent.hunger / 100.0
+            + agent.energy / 100.0
+            + min(1.0, sum(agent.skills.values()) / 10.0)
+            + min(1.0, len(agent.children) / 4.0)
+        )
+
+    def _evolve_neural_population(self, generation: int) -> None:
+        """Select, cross, and mutate resident policies at a training boundary."""
+
+        for settlement_id in sorted(self.settlements):
+            residents = sorted(
+                (
+                    agent
+                    for agent in self.alive_agents
+                    if agent.settlement_id == settlement_id and self._is_adult(agent)
+                ),
+                key=lambda agent: (-self._agent_fitness(agent), agent.agent_id),
+            )
+            if len(residents) < 2:
+                continue
+            elite_count = max(1, ceil(len(residents) * 0.6))
+            elites = residents[:elite_count]
+            for agent in residents[elite_count:]:
+                first = self.random.choice(elites)
+                second = self.random.choice(elites)
+                old_weights = agent.brain_weights
+                agent.brain_weights = self._inherit_brain(first, second)
+                self._emit(
+                    "genetic_policy_evolved",
+                    settlement_id=settlement_id,
+                    generation=generation,
+                    agent_id=agent.agent_id,
+                    parent_ids=[first.agent_id, second.agent_id],
+                    fitness=round(self._agent_fitness(agent), 6),
+                    weight_delta=round(
+                        sum(abs(float(new) - float(old)) for new, old in zip(agent.brain_weights, old_weights)),
+                        8,
+                    ),
+                )
 
     def _update_needs_and_lifecycle(self) -> None:
         for agent_id in sorted(self.agents):
@@ -835,14 +1100,103 @@ class ColonySimulation:
                 # Birth is an observable empty-state boundary.  Caregivers may
                 # act on a newborn, but the newborn learns on later ticks.
                 continue
-            scores = self._agent_action_scores(agent)
-            action = max(scores, key=lambda item: (scores[item], item))
-            self._emit("agent_decision", agent_id=agent.agent_id, action=action, scores={key: round(value, 4) for key, value in sorted(scores.items())})
+            observation = self._agent_brain_inputs(agent)
+            brain = NNetwork(
+                NEURAL_INPUT_COUNT,
+                NEURAL_HIDDEN_COUNT,
+                len(AGENT_ACTIONS),
+                weights=agent.brain_weights,
+            )
+            probabilities = brain.predict(observation)
+            # The network chooses; the world only masks actions that have no
+            # possible target or resource. This keeps invalid actions from
+            # dominating early learning without scripting a preferred story.
+            selectable = probabilities.copy()
+            if not any(
+                child_id in self.agents
+                and self.agents[child_id].alive
+                and self.agents[child_id].age < self.config.adult_age
+                and self._distance(agent, self.agents[child_id]) <= self.config.perception_radius
+                for child_id in agent.children
+            ):
+                selectable[AGENT_ACTIONS.index("care")] = 0.0
+            if not any(
+                other.agent_id != agent.agent_id
+                and other.alive
+                and other.settlement_id == agent.settlement_id
+                for other in self.alive_agents
+            ):
+                selectable[AGENT_ACTIONS.index("socialize")] = 0.0
+            if agent.job_id is not None or self._best_recipe_for(agent) is None:
+                selectable[AGENT_ACTIONS.index("produce")] = 0.0
+            total_probability = float(selectable.sum())
+            if total_probability <= 0:
+                selectable[AGENT_ACTIONS.index("move")] = 1.0
+                total_probability = 1.0
+            probabilities = selectable / total_probability
+            action_index = max(
+                range(len(AGENT_ACTIONS)),
+                key=lambda index: (float(probabilities[index]), AGENT_ACTIONS[index]),
+            )
+            action = AGENT_ACTIONS[action_index]
+            probability_map = {
+                name: round(float(probabilities[index]), 6)
+                for index, name in enumerate(AGENT_ACTIONS)
+            }
+            self._emit(
+                "agent_decision",
+                agent_id=agent.agent_id,
+                action=action,
+                scores=probability_map,
+                probabilities=[probability_map[name] for name in AGENT_ACTIONS],
+                policy="neural_network",
+            )
             reward = self._apply_agent_action(agent, action)
+            old_weights = brain.get_weights()
+            brain.learn(observation, action_index, reward)
+            new_weights = brain.get_weights()
+            agent.brain_weights = tuple(round(float(value), 8) for value in new_weights)
             previous = agent.learned_policy.get(action, 0.0)
             updated = _clamp(previous + 0.2 * (reward - previous), -1.0, 1.0)
             agent.learned_policy[action] = round(updated, 6)
-            self._emit("learning_updated", agent_id=agent.agent_id, action=action, reward=round(reward, 4), value=agent.learned_policy[action])
+            self._emit(
+                "learning_updated",
+                agent_id=agent.agent_id,
+                action=action,
+                reward=round(reward, 4),
+                value=agent.learned_policy[action],
+                network=True,
+                weight_delta=round(sum(abs(float(new) - float(old)) for new, old in zip(new_weights, old_weights)), 8),
+            )
+
+    def _agent_brain_inputs(self, agent: AgentState) -> Tuple[float, ...]:
+        """Return the fixed observation vector consumed by a resident brain."""
+
+        settlement = self.settlements[agent.settlement_id]
+        nearby_adults = sum(
+            1
+            for other in self.alive_agents
+            if other.agent_id != agent.agent_id
+            and other.settlement_id == agent.settlement_id
+            and self._is_adult(other)
+            and self._distance(agent, other) <= self.config.perception_radius
+        )
+        max_affinity = max(
+            (value for value in agent.affinity.values() if math.isfinite(value)),
+            default=0.0,
+        )
+        return (
+            round(agent.hunger / 100.0, 6),
+            round(agent.energy / 100.0, 6),
+            round(agent.health / 100.0, 6),
+            round(min(1.0, len(agent.memory) / max(1, self.config.memory_capacity)), 6),
+            round(min(1.0, nearby_adults / 4.0), 6),
+            round(min(1.0, settlement.storage.get("food", 0) / 20.0), 6),
+            round(min(1.0, settlement.storage.get("grain", 0) / 20.0), 6),
+            1.0 if agent.job_id is not None else 0.0,
+            round(_clamp(max_affinity, -1.0, 1.0), 6),
+            round(min(1.0, len(settlement.technologies) / max(1, len(TECHNOLOGIES))), 6),
+        )
 
     def _agent_action_scores(self, agent: AgentState) -> Dict[str, float]:
         same_settlement_adults = [
@@ -870,6 +1224,8 @@ class ColonySimulation:
             self._move_agent(agent)
             return 0.35
         if action == "produce":
+            if agent.job_id is not None:
+                return -0.1
             recipe_name = self._best_recipe_for(agent)
             if recipe_name and self.start_production(agent.agent_id, recipe_name):
                 return 0.6
@@ -917,29 +1273,188 @@ class ColonySimulation:
             candidates.append((shortage + agent.skills.get(recipe_name, 0) * 0.25, recipe_name))
         return max(candidates, key=lambda item: (item[0], item[1]))[1] if candidates else None
 
+    def _settlement_brain_inputs(self, settlement_id: str) -> Tuple[float, ...]:
+        settlement = self.settlements[settlement_id]
+        population = self._settlement_population(settlement_id)
+        food_shortage = max(0, population * 2 - settlement.storage.get("food", 0))
+        storage_load = sum(settlement.storage.values())
+        relation_trust = [
+            float(relation.get("trust", 0.0))
+            for relation in settlement.relations.values()
+            if math.isfinite(float(relation.get("trust", 0.0)))
+        ]
+        active_jobs = sum(
+            1
+            for job in self.production_jobs.values()
+            if job.settlement_id == settlement_id
+        ) + sum(
+            1
+            for job in self.research_jobs.values()
+            if job.settlement_id == settlement_id
+        )
+        return (
+            round(min(1.0, food_shortage / max(1, population * 2)), 6),
+            round(min(1.0, population / max(1, self.config.settlement_capacity)), 6),
+            round(min(1.0, settlement.treasury / 200.0), 6),
+            round(min(1.0, storage_load / max(1, self.config.storage_capacity)), 6),
+            round(min(1.0, len(settlement.technologies) / max(1, len(TECHNOLOGIES))), 6),
+            round(min(1.0, len(settlement.territory) / max(1, self.config.width * self.config.height)), 6),
+            round(min(1.0, active_jobs / 8.0), 6),
+            round(_clamp(statistics.mean(relation_trust) if relation_trust else 0.0, -1.0, 1.0), 6),
+        )
+
+    def _settlement_has_migration_target(self, settlement_id: str) -> bool:
+        current = self.settlements[settlement_id]
+        population = self._settlement_population(settlement_id)
+        shortage = max(0, population * 2 - current.storage.get("food", 0))
+        if shortage <= 0 or population <= 1:
+            return False
+        return any(
+            target_id != settlement_id
+            and current.relations[target_id].get("treaty") != "war"
+            and target.storage.get("food", 0) - self._settlement_population(target_id) * 2 > 0
+            and self._settlement_population(target_id) < self.config.settlement_capacity
+            for target_id, target in self.settlements.items()
+        )
+
     def _run_settlement_ai(self) -> None:
         ids = sorted(self.settlements)
         for settlement_id in ids:
             settlement = self.settlements[settlement_id]
             population = self._settlement_population(settlement_id)
             food_shortage = max(0, population * 2 - settlement.storage.get("food", 0))
-            action = "produce" if food_shortage else "research" if self.research_jobs_for(settlement_id) is None else "observe"
-            if food_shortage:
-                self.record_demand(settlement_id, "food", max(1, food_shortage))
+            observation = self._settlement_brain_inputs(settlement_id)
+            brain = NNetwork(
+                SETTLEMENT_INPUT_COUNT,
+                SETTLEMENT_HIDDEN_COUNT,
+                len(SETTLEMENT_ACTIONS),
+                weights=settlement.brain_weights,
+            )
+            probabilities = brain.predict(observation)
+            selectable = probabilities.copy()
+            research_available = (
+                self.research_jobs_for(settlement_id) is None
+                and self._next_research_target(settlement) is not None
+                and any(
+                    self._is_adult(agent)
+                    and agent.settlement_id == settlement_id
+                    and agent.job_id is None
+                    for agent in self.alive_agents
+                )
+            )
+            production_available = any(
+                self._is_adult(agent)
+                and agent.settlement_id == settlement_id
+                and agent.job_id is None
+                and self._best_recipe_for(agent) is not None
+                for agent in self.alive_agents
+            )
+            migration_available = self._settlement_has_migration_target(settlement_id)
+            trade_available = any(
+                relation.get("treaty") in {"trade", "alliance"}
+                for relation in settlement.relations.values()
+            )
+            diplomacy_available = any(
+                relation.get("treaty") == "neutral"
+                for relation in settlement.relations.values()
+            )
+            if not research_available:
+                selectable[SETTLEMENT_ACTIONS.index("research")] = 0.0
+            if not production_available:
+                selectable[SETTLEMENT_ACTIONS.index("produce")] = 0.0
+            if not migration_available:
+                selectable[SETTLEMENT_ACTIONS.index("migrate")] = 0.0
+            if not trade_available:
+                selectable[SETTLEMENT_ACTIONS.index("trade")] = 0.0
+            if not diplomacy_available:
+                selectable[SETTLEMENT_ACTIONS.index("diplomacy")] = 0.0
+            if food_shortage and migration_available and not production_available and not trade_available:
+                # In a resource-empty settlement, migration is the only
+                # feasible survival response. The network still decides in
+                # every ordinary state; this is an environmental action mask.
+                for unavailable_survival_action in ("research", "observe", "diplomacy"):
+                    selectable[SETTLEMENT_ACTIONS.index(unavailable_survival_action)] = 0.0
+            total_probability = float(selectable.sum())
+            if total_probability <= 0:
+                selectable[SETTLEMENT_ACTIONS.index("observe")] = 1.0
+                total_probability = 1.0
+            probabilities = selectable / total_probability
+            action_index = max(
+                range(len(SETTLEMENT_ACTIONS)),
+                key=lambda index: (float(probabilities[index]), SETTLEMENT_ACTIONS[index]),
+            )
+            action = SETTLEMENT_ACTIONS[action_index]
+            probability_map = {
+                name: round(float(probabilities[index]), 6)
+                for index, name in enumerate(SETTLEMENT_ACTIONS)
+            }
+            self._emit(
+                "settlement_decision",
+                settlement_id=settlement_id,
+                action=action,
+                food_shortage=food_shortage,
+                scores=probability_map,
+                probabilities=[probability_map[name] for name in SETTLEMENT_ACTIONS],
+                policy="neural_network",
+            )
+            reward = 0.05
+            if action == "produce":
+                if food_shortage:
+                    self.record_demand(settlement_id, "food", max(1, food_shortage))
                 self.allocate_jobs(settlement_id)
-            elif self.research_jobs_for(settlement_id) is None:
-                researcher = next((agent for agent in sorted(self.alive_agents, key=lambda item: item.agent_id) if agent.settlement_id == settlement_id and self._is_adult(agent) and agent.job_id is None), None)
+                reward = 0.4 if food_shortage else 0.1
+            elif action == "research":
+                researcher = next(
+                    (
+                        agent
+                        for agent in sorted(self.alive_agents, key=lambda item: item.agent_id)
+                        if agent.settlement_id == settlement_id
+                        and self._is_adult(agent)
+                        and agent.job_id is None
+                    ),
+                    None,
+                )
                 technology = self._next_research_target(settlement)
                 if researcher is not None and technology is not None:
                     self.start_research(researcher.agent_id, technology)
+                    reward = 0.4
+                else:
+                    reward = -0.05
+            elif action == "migrate":
+                before_population = population
+                self._run_ai_migration(settlement_id)
+                reward = 0.3 if self._settlement_population(settlement_id) < before_population else -0.05
+            elif action == "trade":
+                reward = 0.2
+            elif action == "diplomacy":
+                target_id = next(
+                    (
+                        target_id
+                        for target_id, relation in sorted(settlement.relations.items())
+                        if relation.get("treaty") == "neutral"
+                    ),
+                    None,
+                )
+                reward = 0.2 if target_id is not None and self.negotiate(settlement_id, target_id, "trade") else -0.05
+            old_weights = brain.get_weights()
+            brain.learn(observation, action_index, reward)
+            new_weights = brain.get_weights()
+            settlement.brain_weights = tuple(round(float(value), 8) for value in new_weights)
+            previous = settlement.learned_policy.get(action, 0.0)
+            settlement.learned_policy[action] = round(_clamp(previous + 0.15 * (reward - previous), -1.0, 1.0), 6)
+            self._emit(
+                "settlement_learning_updated",
+                settlement_id=settlement_id,
+                action=action,
+                reward=round(reward, 4),
+                value=settlement.learned_policy[action],
+                network=True,
+                weight_delta=round(sum(abs(float(new) - float(old)) for new, old in zip(new_weights, old_weights)), 8),
+            )
             for agent in sorted(self.alive_agents, key=lambda item: item.agent_id):
                 if agent.settlement_id == settlement_id:
                     self.claim_territory(settlement_id, agent.x, agent.y)
                     break
-            self._run_ai_migration(settlement_id)
-            previous = settlement.learned_policy.get(action, 0.0)
-            settlement.learned_policy[action] = round(_clamp(previous + 0.15 * (1.0 if food_shortage == 0 else -0.2), -1.0, 1.0), 6)
-            self._emit("settlement_decision", settlement_id=settlement_id, action=action, food_shortage=food_shortage, policy=settlement.learned_policy[action])
         for index, first_id in enumerate(ids):
             for second_id in ids[index + 1 :]:
                 relation = self.settlements[first_id].relations[second_id]
@@ -1167,6 +1682,24 @@ class ColonySimulation:
         self._emit("pregnancy_started", mother_id=mother.agent_id, partner_id=mother.pregnancy_partner_id, gestation_ticks=self.config.gestation_ticks)
         return True
 
+    def _inherit_brain(self, first: AgentState, second: Optional[AgentState]) -> Tuple[float, ...]:
+        """Crossover and boundedly mutate two parental neural policies."""
+
+        first_weights = first.brain_weights
+        second_weights = second.brain_weights if second is not None else first_weights
+        if len(first_weights) != NEURAL_WEIGHT_COUNT:
+            first_weights = self._new_brain_weights()
+        if len(second_weights) != NEURAL_WEIGHT_COUNT:
+            second_weights = first_weights
+        inherited: List[float] = []
+        for first_weight, second_weight in zip(first_weights, second_weights):
+            value = first_weight if self.random.randrange(2) == 0 else second_weight
+            if self.random.randrange(100) < self.config.mutation_percent:
+                mutation = self.random.randrange(1, 101) / 1000.0
+                value += mutation if self.random.randrange(2) == 0 else -mutation
+            inherited.append(round(max(-2.0, min(2.0, value)), 8))
+        return tuple(inherited)
+
     def _birth(self, mother: AgentState) -> Optional[str]:
         partner_id = mother.pregnancy_partner_id
         partner = self.agents.get(partner_id) if partner_id else None
@@ -1197,6 +1730,7 @@ class ColonySimulation:
             x=mother.x,
             y=mother.y,
             genome=tuple(child_genome),
+            brain_weights=self._inherit_brain(mother, partner),
             _adult_age=self.config.adult_age,
         )
         self.agents[child_id] = child
@@ -1685,8 +2219,13 @@ class ColonySimulation:
         for agent in self.agents.values():
             if not 0 <= agent.x < self.config.width or not 0 <= agent.y < self.config.height:
                 raise AssertionError("agent left world bounds")
+            if len(agent.brain_weights) != NEURAL_WEIGHT_COUNT or any(not math.isfinite(weight) for weight in agent.brain_weights):
+                raise AssertionError("agent neural policy has invalid weights")
             if agent.wallet < 0 or any(quantity < 0 for quantity in agent.inventory.values()):
                 raise AssertionError("agent asset total became negative")
+        for settlement in self.settlements.values():
+            if len(settlement.brain_weights) != SETTLEMENT_WEIGHT_COUNT or any(not math.isfinite(weight) for weight in settlement.brain_weights):
+                raise AssertionError("settlement neural policy has invalid weights")
         if any(settlement.treasury < 0 or any(quantity < 0 for quantity in settlement.storage.values()) for settlement in self.settlements.values()):
             raise AssertionError("settlement asset total became negative")
 
@@ -1714,6 +2253,24 @@ class ColonySimulation:
         """Return a stable hash for checkpoint/replay comparisons."""
 
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+
+    def neural_state_hash(self) -> str:
+        """Return a stable hash of resident and settlement policy weights only."""
+
+        policy_state = {
+            "agents": [
+                {"agent_id": agent.agent_id, "brain_weights": list(agent.brain_weights)}
+                for agent in sorted(self.agents.values(), key=lambda item: item.agent_id)
+            ],
+            "settlements": [
+                {
+                    "settlement_id": settlement.settlement_id,
+                    "brain_weights": list(settlement.brain_weights),
+                }
+                for settlement in sorted(self.settlements.values(), key=lambda item: item.settlement_id)
+            ],
+        }
+        return hashlib.sha256(canonical_json(policy_state).encode("utf-8")).hexdigest()
 
     def event_hash(self) -> str:
         return hashlib.sha256(
@@ -1764,9 +2321,21 @@ class ColonySimulation:
         required = {"schema_version", "config", "tick", "random_state", "agents", "settlements", "resources", "production_jobs", "research_jobs", "events", "next_event_sequence", "next_job_number", "next_research_number"}
         if not isinstance(snapshot, Mapping) or set(snapshot) != required:
             raise SnapshotValidationError("colony snapshot has missing or unknown fields")
-        if snapshot["schema_version"] != SNAPSHOT_SCHEMA_VERSION:
+        schema_version = snapshot.get("schema_version") if isinstance(snapshot, Mapping) else None
+        if schema_version not in SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS:
             raise SnapshotValidationError("unsupported colony snapshot schema version")
-        config = ColonyConfig.from_dict(snapshot["config"])
+        raw_config = snapshot["config"]
+        if schema_version == 4 and isinstance(raw_config, Mapping):
+            # Schema 4 predates the explicit AI switch in some working-tree
+            # snapshots. Fill only declared dataclass defaults; unknown keys
+            # remain rejected by ColonyConfig.from_dict.
+            migrated_config = dict(raw_config)
+            for field_name, field_info in ColonyConfig.__dataclass_fields__.items():
+                if field_name not in migrated_config and field_info.default is not MISSING:
+                    migrated_config[field_name] = field_info.default
+            migrated_config.setdefault("ai_enabled", True)
+            raw_config = migrated_config
+        config = ColonyConfig.from_dict(raw_config)
         try:
             tick = _non_negative(snapshot["tick"], "tick")
             next_event = _positive(snapshot["next_event_sequence"], "next_event_sequence")
@@ -1781,6 +2350,10 @@ class ColonySimulation:
             simulation.agents = {}
             for raw_agent in snapshot["agents"]:
                 agent = AgentState.from_dict(raw_agent)
+                if schema_version == 4 and not agent.brain_weights:
+                    agent.brain_weights = simulation._migrated_brain_weights(agent.agent_id)
+                if len(agent.brain_weights) != NEURAL_WEIGHT_COUNT:
+                    raise SnapshotValidationError("agent neural weights do not match architecture")
                 if agent.agent_id in simulation.agents:
                     raise SnapshotValidationError("duplicate agent id")
                 if not 0 <= agent.x < config.width or not 0 <= agent.y < config.height:
@@ -1789,6 +2362,10 @@ class ColonySimulation:
             simulation.settlements = {}
             for raw_settlement in snapshot["settlements"]:
                 settlement = SettlementState.from_dict(raw_settlement)
+                if schema_version == 4 and not settlement.brain_weights:
+                    settlement.brain_weights = simulation._migrated_settlement_brain_weights(settlement.settlement_id)
+                if len(settlement.brain_weights) != SETTLEMENT_WEIGHT_COUNT:
+                    raise SnapshotValidationError("settlement neural weights do not match architecture")
                 if settlement.settlement_id in simulation.settlements:
                     raise SnapshotValidationError("duplicate settlement id")
                 simulation.settlements[settlement.settlement_id] = settlement

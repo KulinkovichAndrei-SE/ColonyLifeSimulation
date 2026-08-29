@@ -1,6 +1,6 @@
 # Colony Life Simulation roadmap
 
-- **Status:** Phases 1 through 7 are implemented in the deterministic path and consumed by the Pygame observation UI; production-scale optimization and richer learning remain follow-up work.
+- **Status:** Phases 1 through 7 and the neural-policy learning increment are implemented in the deterministic path and consumed by the Pygame observation UI; recurrent memory, cross-run selection, and production-scale optimization remain follow-up work.
 - **Owner:** Maintainer / primary agent
 - **Base commit:** `028a209` on `codex/agent-development-foundation` (PR #6, base `master`)
 - **Last updated:** 2026-08-28
@@ -24,11 +24,11 @@ The baseline compile/test command was attempted during specification work but co
 
 ### Specified by this document
 
-The roadmap is divided into seven capability phases. Phase 2 explicitly includes reproduction, children, pair bonding, love/affinity, consent, pregnancy, birth, and inheritance. Phase 4 explicitly includes the requested money system. The current deterministic path has completed bounded slices for all seven phases; the specification remains the contract for future expansion and for keeping implemented behavior distinct from roadmap intent.
+The roadmap is divided into eight capability phases. Phase 2 explicitly includes reproduction, children, pair bonding, love/affinity, consent, pregnancy, birth, and inheritance. Phase 4 explicitly includes the requested money system. Phase 8 adds active resident and settlement neural policies plus the genetic-transfer contract; recurrent memory and cross-run selection remain deferred.
 
 ### Current implementation boundary
 
-The deterministic engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, Phase 3 bounded cognition/memory rules, Phase 4 production/money rules, Phase 5 research/technology rules, Phase 6 diplomacy/conflict rules, and Phase 7 checkpoint/replay/evaluation rules. `pygame_app.py` consumes that state and events for the playable UI. Agents and settlements select actions autonomously through deterministic state scores and updated learned-policy values. The current implementation does not claim a production-scale performance threshold or opaque neural-network training.
+The deterministic engine now includes the Phase 1 seam, Phase 2 lifecycle/relationship rules, Phase 3 bounded cognition/memory rules, Phase 4 production/money rules, Phase 5 research/technology rules, Phase 6 diplomacy/conflict rules, Phase 7 checkpoint/replay/evaluation rules, and the resident/settlement neural-policy learning increment. `pygame_app.py` consumes that state and events for the playable UI. Residents and settlements select actions through seeded neural networks and explicit rewards, constrained by world feasibility. The current implementation does not claim a production-scale performance threshold or opaque neural-network training.
 
 ## 2. Product goal and user value
 
@@ -36,7 +36,7 @@ Turn the prototype into a deterministic, observable artificial-life simulation w
 
 ### AI control contract
 
-The simulation, rather than the UI, owns all world-changing decisions. Each living resident chooses among movement, production, social interaction, childcare, trade, and learning from current needs, perception, relationship state, skills, genome-derived tendencies, and its bounded learned policy. Each settlement chooses job allocation, research, territory claims, treaty-backed exchange, technology diffusion, migration pressure, and conflict responses from population, resources, treasury, technology, territory, and relation state. Successful or unsuccessful actions update the relevant learned-policy values and emit decision/learning events. This is an explainable deterministic policy-learning slice; a future neural or population-training implementation must preserve the same state ownership and replay contract.
+The simulation, rather than the UI, owns all world-changing decisions. Each living resident chooses among movement, production, social interaction, childcare, trade, and learning from a fixed observation vector via an individual seeded neural network. The environment supplies explicit consequences and rewards, and the network updates online. Children receive parent-derived neural weights through crossover and bounded mutation, while memory, biological genome, and scalar telemetry remain separate. Each settlement chooses job allocation, research, territory claims, treaty-backed exchange, technology diffusion, migration pressure, and conflict responses from population, resources, treasury, technology, territory, and relation state. Decision and learning events expose probabilities, rewards, and weight deltas; all paths preserve deterministic replay.
 
 ## 3. Phased implementation specification
 
@@ -112,9 +112,13 @@ The simulation, rather than the UI, owns all world-changing decisions. Each livi
 
 **Phase requirements:** REQ-P7-001 configurable workload and benchmark scale; REQ-P7-002 checkpoints, event streams, invariant counters, and replay inspection; REQ-P7-003 performance reports include population, world, ticks, warm-up, repetitions, and distributions; REQ-P7-004 emergent claims use approved multi-seed metrics and thresholds.
 
+### Phase 8 — Neural policy learning and genetic transfer
+
+The detailed specification and implementation plan for this increment are [`neural-policy-learning.md`](neural-policy-learning.md) and [`../plans/neural-policy-learning.md`](../plans/neural-policy-learning.md). The active engine uses seeded resident and settlement networks, reward-weighted updates, schema-5 persisted weights with schema-4 migration, and parent crossover/mutation. Recurrent memory and cross-run population selection remain roadmap work.
+
 ## 4. Current increment: deterministic simulation core
 
-The seven vertical slices implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a lifecycle/relationship engine, bounded cognition/memory, a production/money engine, a technology engine, diplomacy/conflict rules, and checkpoint/replay/evaluation support. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, learned policy, material/labor production, incentive-based jobs, bounded storage capacity, wallets/treasuries, demand pricing, atomic trade, specialization focus/capacity metrics, prerequisite-gated research with deterministic success/failure, recipe effects, treaty-gated diffusion, territory claims, migration, persistent relation memory, deterministic combat, replay hashes, 32-seed outcome metrics, and benchmark metadata. `pygame_app.py` observes and renders those rules without owning transitions; production-scale optimization and thresholds remain follow-up work.
+The seven domain slices plus the neural-policy increment implement a pure-Python deterministic clock, seed-owned random source, display-free probe runner, structured events, canonical snapshots, a versioned JSON snapshot/resume seam, a lifecycle/relationship engine, bounded cognition/memory, a production/money engine, a technology engine, diplomacy/conflict rules, checkpoint/replay/evaluation support, and seeded resident/settlement neural learning with genetic policy transfer. The new engine supports tick-driven needs, aging, injury/death, directed affinity, courtship/consent, pair bonds, pregnancy, birth, childcare, isolated inherited genomes, bounded observations, memory TTL, explicit knowledge sharing, learned policy, material/labor production, incentive-based jobs, bounded storage capacity, wallets/treasuries, demand pricing, atomic trade, specialization focus/capacity metrics, prerequisite-gated research with deterministic success/failure, recipe effects, treaty-gated diffusion, territory claims, migration, persistent relation memory, deterministic combat, replay hashes, 32-seed outcome metrics, and benchmark metadata. `pygame_app.py` observes and renders those rules without owning transitions; production-scale optimization and thresholds remain follow-up work.
 
 ### In scope
 
@@ -130,7 +134,7 @@ The seven vertical slices implement a pure-Python deterministic clock, seed-owne
 
 - Cognition beyond the current bounded observations, memory TTL, learning, and explicit sharing hooks.
 - Buildings beyond the current recipe/storage economy, plus production-scale optimization and approved performance claims.
-- Automatic integration of legacy neural-network decisions with the new core.
+- Recurrent resident memory and cross-run population selection.
 - Migration of legacy chromosome pickle files; no new compatibility commitment is made for those files.
 
 ## 5. Domain terms and state ownership

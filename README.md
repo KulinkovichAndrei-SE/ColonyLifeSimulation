@@ -21,8 +21,9 @@ Version 1.0 implements the first prototype loop:
 - Eight-direction movement, local perception, random exploration, and colony-level sharing of discovered map objects.
 - Four available actions: cut trees, gather berries, build a house, and eat.
 - Shared colony inventories and a simple colony level that increases when buildings are completed.
-- A small neural policy per person: five inputs, one four-unit hidden layer, and four action outputs.
-- An experimental genetic loop that selects, crosses over, and mutates neural-network chromosomes using runtime fitness.
+- The legacy comparison path's small neural policy per person: five inputs, one four-unit hidden layer, and four action outputs.
+- Active deterministic neural policies for residents and settlements: residents use ten observations and six action outputs; settlements use eight observations and six high-level action outputs, all with seeded weights and reward-weighted online updates.
+- An active genetic reproduction seam that crosses over and boundedly mutates the parents' neural policy weights while keeping biological genomes and episodic learning separate.
 - Loading and saving chromosome populations between runs through pickle files.
 - Parallel colony and person updates using Python thread pools.
 - A visual status panel showing each colony's color and shared resources.
@@ -35,7 +36,7 @@ Version 1.0 implements the first prototype loop:
 - A Pygame presentation layer in `pygame_app.py`; `main.py` now advances and renders the deterministic engine. The UI is observational: click residents to inspect them, while all movement, work, learning, love, reproduction, trade, research, diplomacy, and conflict are selected by the simulation AI.
 - Phase 7 replay/evaluation support: immutable checkpoint hashes, deterministic replay comparison, explicit 32-seed event/winner/specialization reports, and benchmark reports with warm-up, repetitions, runtime, and memory fields.
 
-The deterministic core and Phases 2–7 engine are implemented infrastructure/domain slices, and the new Pygame UI consumes that state without owning domain rules. Resident and settlement decisions use deterministic learned policies and explicit rewards; this is an explainable policy-learning layer, not a claim of a neural-network trainer. The legacy Pygame simulation remains a separate comparison path.
+The deterministic core and Phases 2–7 engine are implemented infrastructure/domain slices, and the new Pygame UI consumes that state without owning domain rules. Resident and settlement decisions in the active engine use seeded neural policies and explicit environment rewards; world rules only constrain feasibility and consequences. The legacy Pygame simulation remains a separate comparison path.
 
 Several additional resource and building classes already exist in the code (`Stone`, `Iron`, `Copper`, `Gold`, `Barn`, `Tavern`, and `Farm`), but they are not connected to the active simulation loop.
 
@@ -88,10 +89,22 @@ To exercise the new display-free core without opening a window:
 
 ```bash
 python headless_demo.py
+python fast_training.py --seed 7 --generations 100
 python -m unittest discover -s tests -v
 ```
 
-The renderer opens a `1440 x 900` window by default. The map and ledger are read-only views; Space, Up, and Down control only the simulation loop. The `save/` directory is still required only by the legacy comparison path.
+`fast_training.py` runs the autonomous AI continuously without Pygame, sleeps,
+or frame timing. Each requested “generation” is a training window of 20 ticks by
+default; use `--ticks-per-generation` to change it. Training completes all
+requested windows even after a colony reaches `game_over`; use
+`--stop-on-game-over` for diagnostic early termination. The command prints one
+canonical JSON report containing per-window births/deaths, learning and event
+counts, population, economy/invariant metrics, terminal status, and state/event
+hashes. These windows are training intervals, not biological cohort generations.
+Useful overrides include `--population`, `--settlements`, `--width`, `--height`,
+and `--max-age`.
+
+The renderer opens a `1440 x 900` window by default. The map and ledger are read-only views; Space, Up, and Down control only the simulation loop. The header shows `AI learning: ON` for the default active configuration, and resident inspection exposes the latest learned policy and reward. The `save/` directory is still required only by the legacy comparison path.
 
 ## Current limitations
 
@@ -100,7 +113,7 @@ The renderer opens a `1440 x 900` window by default. The map and ledger are read
 - Shared mutable state is updated from nested thread pools without an explicit synchronization model.
 - The deterministic core has a dependency-light test suite, but the legacy simulation still lacks complete integration coverage, dependency locking, packaging metadata, CI, and a benchmark harness.
 - The legacy simulation still evolves chromosomes separately; the active engine models biological reproduction and inherited genomes explicitly.
-- Skills and learned policies are intentionally lightweight and explainable; a richer neural or population-training system remains roadmap work.
+- The active resident and settlement neural trainers are intentionally small and inspectable; recurrent memory and cross-run population selection remain roadmap work.
 - Legacy persistence uses unversioned pickle files and assumes the `save/` directory already exists; the new core uses versioned JSON snapshots but does not migrate chromosome saves.
 - Advanced resources and buildings are defined but disabled or unused.
 - Love/affinity, courtship, consent, reproduction, children, pregnancy, inheritance, childcare, bounded memory, and learning are implemented in the active engine and selected autonomously.
@@ -109,8 +122,9 @@ The renderer opens a `1440 x 900` window by default. The map and ledger are read
 - Territory claims, treaties, migration, relation memory, and deterministic conflict consequences are implemented in the active engine and selected autonomously.
 - The Pygame UI is intentionally an observation surface, not a command console; direct domain APIs remain available for deterministic tests and tooling.
 - The benchmark harness reports workload evidence, but it does not yet claim a target hardware threshold or production-scale performance result.
+- Fast headless training currently uses fixed tick windows; child neural policies now inherit crossover/mutation state, while true cross-run population selection remains deferred.
 
-The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md).
+The phased specifications and the active implementation plan are in [`docs/specs/roadmap.md`](docs/specs/roadmap.md) and [`docs/plans/roadmap.md`](docs/plans/roadmap.md). The neural-policy phase is specified in [`docs/specs/neural-policy-learning.md`](docs/specs/neural-policy-learning.md) and planned in [`docs/plans/neural-policy-learning.md`](docs/plans/neural-policy-learning.md).
 
 ## Development roadmap
 
@@ -124,7 +138,7 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - Add needs, injury, aging, death, pair bonding, love/affinity, courtship, consent, reproduction, pregnancy, children, inheritance, childcare, and meaningful skill progression.
    - Replace global action throttles with per-agent scheduling and explicit ownership of mutable state.
 3. **Build cognition and memory**
-   - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning. The first headless cognition slice is implemented; legacy integration remains deferred.
+   - Define perception limits, episodic and semantic memory, learned world models, and lifetime learning. The active resident neural policy now consumes observations and updates from explicit rewards.
    - Keep individual memory separate from knowledge shared by a settlement.
 4. **Grow settlements and economies**
    - The first headless economy slice is implemented: jobs, storage, production chains, wallets/treasury, money, and atomic trade.
@@ -136,6 +150,8 @@ The roadmap is intentionally capability-driven. Each milestone should be deliver
    - The first deterministic diplomacy/conflict slice is implemented: claims, trade gates, treaties, migration, resource-pressure decisions, combat, and persistent inter-settlement memory. The current UI exposes the resulting state and events while settlement AI chooses the actions.
 7. **Scale from villages to cities**
    - The first deterministic scale/replay slice is implemented: checkpoints, replay hashes, multi-seed reports, and benchmark metadata. Larger optimization and approved production-scale thresholds remain follow-up work.
+8. **Evolve learned behavior**
+   - Resident and settlement neural policies plus parent-to-child crossover/mutation are implemented. Recurrent memory and cross-run selection remain future work.
 
 ## Agent-assisted development
 

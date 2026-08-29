@@ -133,7 +133,7 @@ Repository baseline and graphical checks are separately reported. Bare `python` 
 ## 7. Explicitly deferred work and next task
 
 - Legacy-path migration: port the deterministic engine's people/settlement state into the old `Human`/`Colony` modules only if compatibility and persistence policy are approved.
-- Richer learning: replace or extend the current explainable learned-policy scores with a reproducible population-training or neural-policy experiment while preserving explicit state ownership.
+- Richer learning: extend the active neural policies with recurrent memory and cross-run population selection while preserving explicit state ownership.
 - Production scale: establish approved population/world/tick thresholds and optimize only after benchmark workloads and replay constraints are fixed.
 - Richer visualization: add charts, timeline filters, and camera tooling without adding world-changing UI commands.
 

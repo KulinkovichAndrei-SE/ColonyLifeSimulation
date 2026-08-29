@@ -45,7 +45,7 @@ class PygameSimulationApp:
         self.small_font = pygame.font.SysFont("consolas", 13)
         self.title_font = pygame.font.SysFont("consolas", 20, bold=True)
         self.simulation = simulation or ColonySimulation(
-            ColonyConfig(seed=20260828, width=40, height=28, population=12, settlement_count=2)
+            ColonyConfig(seed=20260828, width=40, height=28, population=12, settlement_count=2, ai_enabled=True)
         )
         self.frames_per_second = frames_per_second
         self.running = True
@@ -185,7 +185,8 @@ class PygameSimulationApp:
         invariants = self.simulation.invariants()
         y = self._text(f"tick {self.simulation.tick}   {'PAUSED' if self.paused else 'RUNNING'}", x, y)
         y = self._text(f"residents {self.simulation.alive_population}/{len(self.simulation.agents)}   money {invariants['total_money']}", x, y)
-        y = self._text("movement: every tick  |  child: small dot  |  bond: pink ring", x, y, self.small_font, MUTED)
+        learning_status = "ON" if self.simulation.config.ai_enabled else "OFF"
+        y = self._text(f"AI learning: {learning_status}  |  policy: neural network  |  child: small dot  |  bond: pink ring", x, y, self.small_font, MUTED)
         y += 7
         self._draw_rule(x, y, rect.right - 14)
         y += 8
@@ -313,7 +314,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.frames is not None and args.frames < 0:
         parser.error("--frames must be non-negative")
     simulation = ColonySimulation(
-        ColonyConfig(seed=args.seed, width=40, height=28, population=12, settlement_count=2)
+        ColonyConfig(seed=args.seed, width=40, height=28, population=12, settlement_count=2, ai_enabled=True)
     )
     PygameSimulationApp(simulation).run(max_frames=args.frames)
     return 0

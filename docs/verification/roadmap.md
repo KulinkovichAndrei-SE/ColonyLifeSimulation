@@ -52,7 +52,7 @@ All commands below used the bundled runtime:
 ## Not run / explicitly deferred
 
 - A real-display visual screenshot was not run in this headless validation environment; the dummy SDL smoke test verifies initialization, frame execution, and clean exit. A maintainer can perform a manual visual pass with `python main.py` on a desktop display.
-- Legacy chromosome-pickle migration, a richer neural/population-training experiment, and approved production-scale performance thresholds remain roadmap follow-up work. They are not blockers for the implemented deterministic phases.
+- Legacy chromosome-pickle migration, recurrent/cross-run population training, and approved production-scale performance thresholds remain roadmap follow-up work. They are not blockers for the implemented deterministic phases.
 
 ## Independent gate
 
